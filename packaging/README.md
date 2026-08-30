@@ -9,25 +9,26 @@ Amaç: arkadaşlar **Python / Tor kurmadan** çift tıklayıp bağlansın.
 - `onionmail(.exe)` — `packaging/launcher.py`'den PyInstaller ile
 - `tor/tor(.exe)` — Tor Expert Bundle'dan; uygulama açılışta kendi Tor'unu
   başlatır (`SocksPort 9250`, kendi `DataDirectory`'si)
-- `client.default.json` — sunucu onion'u burada gömülüyse ilk açılışta
-  `~/.config/onionmail/client.json`'a kopyalanır; boşsa kullanıcı GUI'de girer
 
-Kullanıcı deneyimi: exe'yi çalıştır → Tor bootstrap (~10-30 sn) → **Giriş
-ekranı** → onion + davet kodu + kullanıcı adı + şifre → posta kutusu.
+Sunucu onion'u **pakete gömülmez**. Kullanıcı deneyimi: exe'yi çalıştır →
+Tor bootstrap (~10-30 sn) → **Giriş ekranı** → sunucu onion adresi + Tor
+SOCKS (önceden dolu) → "Bağlantıyı test et" → davet kodu + kullanıcı adı +
+şifre → posta kutusu. Onion ve oturum `~/.config/onionmail/`'da hatırlanır,
+sonraki açılışlarda doğrudan kutu gelir.
 
 ## GitHub Actions (önerilen — çok-OS otomatik)
 
 1. Bu depoyu GitHub'a it (aşağıda "Depoyu oluştur").
-2. (İsteğe bağlı) **Settings → Secrets and variables → Actions → Variables**
-   altına `SERVER_ONION = <sunucunun .onion adresi>` ekle. Tanımlıysa paketlere
-   gömülür.
-3. Bir sürüm etiketi at:
+2. Bir sürüm etiketi at:
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
-4. Actions çalışır; Windows/macOS/Linux zip'leri hem **artifact** hem de
+3. Actions çalışır; Windows/macOS/Linux zip'leri hem **artifact** hem de
    **Release** eki olarak yüklenir. `workflow_dispatch` ile elle de tetiklenir.
+
+Arkadaşına: zip'i indir → aç → `onionmail(.exe)` çalıştır → Giriş ekranında
+**sunucu onion adresini** ve davet kodunu gir.
 
 Tor sürümü `.github/workflows/build.yml` içinde sabit (`V=14.0.1`) — Tor Expert
 Bundle güncellendikçe orayı yükselt.

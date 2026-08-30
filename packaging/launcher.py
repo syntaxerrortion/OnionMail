@@ -10,7 +10,6 @@ SOCKS'u kullanır; yoksa Tor Browser'ın 9150'sine düşer.
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import socket
@@ -103,39 +102,9 @@ def start_tor() -> tuple[subprocess.Popen | None, int]:
     return proc, SOCKS_PORT
 
 
-def _seed_client_json(socks_port: int) -> None:
-    """İlk çalıştırmada, paketle gelen şablondan sunucu onion'unu yaz."""
-    try:
-        from onionmail.config import Config
-        cfg = Config.load()
-        target = cfg.client.session_path_p.with_name("client.json")
-    except Exception:  # noqa: BLE001
-        target = Path.home() / ".config" / "onionmail" / "client.json"
-    if target.is_file():
-        return
-    tmpl = _res_dir() / "client.default.json"
-    if not tmpl.is_file():
-        return
-    try:
-        d = json.loads(tmpl.read_text())
-    except ValueError:
-        return
-    if not str(d.get("server_onion", "")).endswith(".onion"):
-        return  # şablon boş — kullanıcı GUI'de girecek
-    d["socks_host"] = "127.0.0.1"
-    d["socks_port"] = socks_port
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(d, indent=2))
-    try:
-        target.chmod(0o600)
-    except OSError:
-        pass
-
-
 def main() -> int:
     tor_proc, socks_port = start_tor()
     try:
-        _seed_client_json(socks_port)
         from onionmail.config import Config
         from onionmail.gui import run as gui_run
 

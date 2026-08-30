@@ -5,9 +5,8 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# İsteğe bağlı: repo -> Settings -> Secrets and variables -> Actions -> Variables
-#   SERVER_ONION = <sunucunun .onion adresi>
-# Tanımlıysa paketlere gömülür; arkadaş ilk açılışta onion girmek zorunda kalmaz.
+# Sunucu onion'u pakete GÖMÜLMEZ — kullanıcı ilk açılışta Giriş ekranında
+# elle girer (sonra ~/.config/onionmail/client.json'da hatırlanır).
 
 jobs:
   build:
@@ -50,17 +49,6 @@ jobs:
           # TEB düzeni: tor/tor(.exe) (+ macOS'ta libevent vb.)
           cp -R tor_dl/tor/. tor/
           ls -R tor
-
-      - name: sunucu onion'unu göm (varsa)
-        shell: bash
-        run: |
-          ONION="${{ vars.SERVER_ONION }}"
-          if [ -n "$ONION" ]; then
-            printf '{\n  "server_onion": "%s",\n  "preshared_key": "",\n  "socks_host": "127.0.0.1",\n  "socks_port": 9250\n}\n' "$ONION" > packaging/client.default.json
-            echo "gömüldü: $ONION"
-          else
-            echo "SERVER_ONION tanımsız — arkadaş ilk açılışta girecek"
-          fi
 
       - name: PyInstaller
         env:

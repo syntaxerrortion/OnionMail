@@ -18,10 +18,6 @@ if os.path.isdir(tor_dir):
             dst = "tor" if rel == "." else os.path.join("tor", rel)
             datas.append((src, dst))
 
-_tmpl = os.path.join("packaging", "client.default.json")
-if os.path.isfile(_tmpl):
-    datas.append((_tmpl, "."))
-
 a = Analysis(
     ["packaging/launcher.py"],
     pathex=["."],

@@ -975,8 +975,9 @@ def run(cfg: Config, local: bool = False) -> None:
         app._refs.append(win)
         win.show()
 
-    use_net = not local and (cfg.client.server_onion or load_session(cfg))
-    if not use_net:
+    # --local: doğrudan Maildir. Aksi halde ağ modu: oturum varsa NetBackend,
+    # yoksa Giriş ekranı (sunucu onion'u boşsa kullanıcı orada elle girer).
+    if local:
         open_main(LocalBackend(cfg))
         sys.exit(app.exec())
 
