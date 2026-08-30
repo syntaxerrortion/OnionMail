@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 from email.utils import parseaddr
 from pathlib import Path
@@ -21,8 +22,9 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-    QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from .backend import Backend, LocalBackend, NetBackend
@@ -67,6 +69,8 @@ QScrollBar:horizontal {{ background:#000; height:12px; border-top:1px solid #fff
 QScrollBar::handle {{ background:#fff; min-height:20px; min-width:20px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ background:#000; }}
 QToolTip {{ background:{MIDNIGHT}; color:#fff; border:1px solid #fff; }}
+QProgressBar#busyBar {{ background:#000; border:0; height:20px; }}
+QProgressBar#busyBar::chunk {{ background:#1e6fff; width:10px; margin:2px; }}
 QWidget#attBar {{ background:{MIDNIGHT}; border:1px solid #fff; }}
 QWidget#attBar QLabel {{ background:{MIDNIGHT}; font-weight:bold; }}
 QWidget#attBar QPushButton {{ background:{MIDNIGHT}; padding:2px 10px; }}
@@ -174,21 +178,23 @@ class ComposeWindow(QWidget):
         if missing:
             self.lbl_err.setText("dosya yok: " + ", ".join(missing))
             return
-        try:
-            msg = build_message(
-                self.cfg, to=to, cc=self.e_cc.text(),
-                subject=self.e_subject.text().strip() or "(konu yok)",
-                body=self.e_body.toPlainText(),
-                attachments=attach, in_reply_to=self._in_reply_to,
-            )
-            self.backend.send(msg, bcc=[
-                x.strip() for x in self.e_bcc.text().split(",") if x.strip()
-            ])
-        except Exception as e:  # noqa: BLE001
-            self.lbl_err.setText(str(e))
-            return
-        self.sent.emit()
-        self.close()
+        cc = self.e_cc.text()
+        subject = self.e_subject.text().strip() or "(konu yok)"
+        body = self.e_body.toPlainText()
+        bcc = [x.strip() for x in self.e_bcc.text().split(",") if x.strip()]
+        in_reply_to = self._in_reply_to
+
+        def work(is_cancelled):
+            msg = build_message(self.cfg, to=to, cc=cc, subject=subject, body=body,
+                                attachments=attach, in_reply_to=in_reply_to)
+            if is_cancelled():
+                raise _Cancelled
+            self.backend.send(msg, bcc=bcc)
+
+        if run_busy(self, "Mesaj gönderiliyor", work,
+                    ok_text="Mesaj gönderildi", err_text="Gönderim başarısız"):
+            self.sent.emit()
+            self.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -293,6 +299,136 @@ class _Worker(QThread):
             self.ok.emit(self._fn())
         except Exception as e:  # noqa: BLE001
             self.fail.emit(str(e))
+
+
+class _Cancelled(Exception):
+    """work() içinde kullanıcı iptal ettiğinde fırlatılır."""
+
+
+# İptal edilip diyaloğu kapanan ama hâlâ koşan worker'lar burada tutulur ki
+# QThread nesnesi çalışırken çöpe gitmesin (Qt aksi halde abort eder).
+_LIVE_WORKERS: set = set()
+
+
+class BusyDialog(QDialog):
+    """Kare kare ilerleyen mavi çubuklu küçük işlem penceresi. Çerçevesiz,
+    ortalı düz yazı. İş sürerken 'İptal', bitince 'OK' düğmesi görünür."""
+
+    def __init__(self, parent, busy_text: str = "İşlem sürüyor"):
+        super().__init__(parent)
+        self.setWindowTitle(busy_text)
+        self.setModal(True)
+        self.setMinimumWidth(380)
+        self._done = False
+        self.on_cancel = None            # run_busy tarafından atanır
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 16)
+        v.setSpacing(12)
+
+        self.note = QLabel(busy_text)
+        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.note.setWordWrap(False)
+        self.note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        v.addWidget(self.note)
+
+        self.bar = QProgressBar(objectName="busyBar")
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(False)
+        v.addWidget(self.bar)
+
+        self.cancel = QPushButton("İptal")
+        self.cancel.clicked.connect(self._cancel_clicked)
+        self.ok = QPushButton("OK")
+        self.ok.setVisible(False)          # yalnızca iş bitince görünür
+        self.ok.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.cancel)
+        row.addWidget(self.ok)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        self._t = QTimer(self)
+        self._t.setInterval(110)
+        self._t.timeout.connect(self._tick)
+
+    def _tick(self) -> None:
+        if not self._done:
+            self.bar.setValue(min(self.bar.value() + 4, 92))
+
+    def _cancel_clicked(self) -> None:
+        if self._done:
+            return
+        if callable(self.on_cancel):
+            self.on_cancel()
+        self._done = True             # kapanmaya izin ver
+        self._t.stop()
+        super().reject()
+
+    def start(self) -> None:
+        self.bar.setValue(0)
+        self._t.start()
+        self.show()
+
+    def finish(self, ok: bool, text: str) -> None:
+        self._done = True
+        self._t.stop()
+        self.bar.setValue(100)
+        self.note.setText(text)
+        self.note.setToolTip(text)
+        self.cancel.setVisible(False)
+        self.ok.setVisible(True)
+        self.ok.setDefault(True)
+        self.ok.setFocus()
+        self.adjustSize()
+
+    # iş bitmeden Esc/çarpı ile kapanmayı engelle (kapatmak için İptal var)
+    def reject(self) -> None:
+        if self._done:
+            super().reject()
+
+    def closeEvent(self, e) -> None:
+        e.accept() if self._done else e.ignore()
+
+
+def run_busy(parent, busy_text: str, work, *,
+             ok_text: str = "İşlem tamamlandı", err_text: str = "İşlem başarısız") -> bool:
+    """`work(is_cancelled)`'i arka planda çalıştırır, BusyDialog gösterir.
+    `work` tek argüman alır: iptal edildiyse True döndüren bir çağrılabilir.
+    Başarılıysa True, iptal/hata ise False döner."""
+    dlg = BusyDialog(parent, busy_text)
+    state = {"ok": False, "cancelled": False}
+    ev = threading.Event()
+
+    def _done(_res) -> None:
+        if state["cancelled"]:
+            return
+        state["ok"] = True
+        dlg.finish(True, ok_text)
+
+    def _fail(m: str) -> None:
+        if state["cancelled"]:
+            return
+        dlg.finish(False, err_text)
+        dlg.note.setToolTip(str(m))
+
+    def _cancel() -> None:
+        state["cancelled"] = True
+        ev.set()
+
+    dlg.on_cancel = _cancel
+    w = _Worker(lambda: work(ev.is_set))
+    w.ok.connect(_done)
+    w.fail.connect(_fail)
+    _LIVE_WORKERS.add(w)
+    w.finished.connect(lambda: _LIVE_WORKERS.discard(w))
+    dlg._worker_ref = w  # GC koruması
+    dlg.start()
+    w.start()
+    dlg.exec()
+    return state["ok"]
 
 
 # --------------------------------------------------------------------------- #
@@ -793,22 +929,30 @@ class MessagerWindow(QMainWindow):
         if not dest:
             return
         folder = self.folder
-        self.status.showMessage(f"kaydediliyor: {filename} …")
+        tmp = Path(dest + ".part")
 
-        def work():
+        def work(is_cancelled):
             msg = self.backend.get(folder, key)
+            if is_cancelled():
+                raise _Cancelled
             for i, part in enumerate(msg.walk()):
                 if i == index and not part.is_multipart():
-                    Path(dest).write_bytes(part.get_payload(decode=True) or b"")
+                    data = part.get_payload(decode=True) or b""
+                    if is_cancelled():
+                        raise _Cancelled
+                    tmp.write_bytes(data)
+                    if is_cancelled():
+                        tmp.unlink(missing_ok=True)
+                        raise _Cancelled
+                    tmp.replace(dest)
                     return dest
             raise ValueError("ek parçası bulunamadı")
 
-        w = _Worker(work)
-        w.ok.connect(lambda p: self.status.showMessage(f"kaydedildi: {p}"))
-        w.fail.connect(lambda m: QMessageBox.warning(self, "Kaydedilemedi", m))
-        w.finished.connect(lambda: self._render_jobs.discard(w))
-        self._render_jobs.add(w)
-        w.start()
+        ok = run_busy(self, "Dosya indiriliyor", work,
+                      ok_text="İndirme tamamlandı", err_text="İndirme başarısız")
+        tmp.unlink(missing_ok=True)   # iptal/hata artığı
+        if ok:
+            self.status.showMessage(f"kaydedildi: {dest}")
 
     def _render_selected(self) -> None:
         key = self._selected_key()
