@@ -15,7 +15,9 @@ from email.utils import parseaddr
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QAction, QBrush, QColor, QFont, QFontMetrics, QKeySequence, QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -65,6 +67,10 @@ QScrollBar:horizontal {{ background:#000; height:12px; border-top:1px solid #fff
 QScrollBar::handle {{ background:#fff; min-height:20px; min-width:20px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ background:#000; }}
 QToolTip {{ background:{MIDNIGHT}; color:#fff; border:1px solid #fff; }}
+QWidget#attBar {{ background:{MIDNIGHT}; border:1px solid #fff; }}
+QWidget#attBar QLabel {{ background:{MIDNIGHT}; font-weight:bold; }}
+QWidget#attBar QPushButton {{ background:{MIDNIGHT}; padding:2px 10px; }}
+QWidget#attBar QPushButton:hover {{ background:{MIDNIGHT_HI}; }}
 """
 
 
@@ -585,8 +591,20 @@ class MessagerWindow(QMainWindow):
         self._inbox_seeded = False
         self._flash_timer: QTimer | None = None
         self._chime_fx = None
+        # --- mesaj gövdesi: arka planda getir + önbellek + debounce ---
+        self._render_jobs: set = set()      # canlı _Worker referansları (GC koruması)
+        self._render_seq = 0                # en son istek sırası (eski cevapları ele)
+        self._body_cache: dict = {}         # (folder, key, raw) -> render edilmiş metin
+        self._auto_busy = False             # _auto_refresh list() zaten çalışıyor mu
 
-        self.resize(1000, 680)
+        # Açılış boyutu: 155x44 karakterlik monospace ızgara (sonra serbestçe
+        # küçültülüp büyütülebilir).
+        _f = QFont("DejaVu Sans Mono")
+        _f.setPixelSize(13)               # QSS ile aynı
+        _fm = QFontMetrics(_f)
+        _w = _fm.horizontalAdvance("M") * 155 + 22   # + kenarlık / kaydırma çubuğu
+        _h = _fm.height() * 44 + 52                   # + menü + durum çubuğu
+        self.resize(_w, _h)
         self._build_menu()
 
         self.titlebar = QLabel("")
@@ -606,14 +624,32 @@ class MessagerWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 240)
-        self.table.currentCellChanged.connect(lambda *_: self._render_selected())
+        self._render_debounce = QTimer(self)
+        self._render_debounce.setSingleShot(True)
+        self._render_debounce.setInterval(120)
+        self._render_debounce.timeout.connect(self._render_selected)
+        self.table.currentCellChanged.connect(lambda *_: self._render_debounce.start())
 
         self.body = QPlainTextEdit()
         self.body.setReadOnly(True)
 
+        # ek dosya çubuğu: mesajda ek varsa gövdenin üstünde tıklanabilir düğmeler
+        self.att_bar = QWidget(objectName="attBar")
+        self._att_lay = QHBoxLayout(self.att_bar)
+        self._att_lay.setContentsMargins(6, 3, 6, 3)
+        self._att_lay.setSpacing(6)
+        self.att_bar.hide()
+
+        body_box = QWidget()
+        bv = QVBoxLayout(body_box)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(0)
+        bv.addWidget(self.att_bar)
+        bv.addWidget(self.body, 1)
+
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(self.table)
-        split.addWidget(self.body)
+        split.addWidget(body_box)
         split.setSizes([300, 360])
 
         central = QWidget()
@@ -691,6 +727,7 @@ class MessagerWindow(QMainWindow):
         )
         if not self._rows:
             self.body.setPlainText("")
+            self._set_attachments(None, [])
         elif select:
             self.table.selectRow(0)
         elif prev_key is not None:
@@ -710,38 +747,149 @@ class MessagerWindow(QMainWindow):
         it = self.table.item(r, 0)
         return it.data(Qt.ItemDataRole.UserRole) if it else None
 
+    def _render_body(self, folder: str, key: str, raw: bool) -> tuple[str, list]:
+        """Ağ çağrısı yapar — arka plan iş parçacığında çalıştırılmalı.
+        Döner: (gövde metni, [(index, dosya, boyut, tür, riskli), ...])."""
+        if raw:
+            return self.backend.get_bytes(folder, key).decode("utf-8", "replace"), []
+        msg = self.backend.get(folder, key)
+        head = "\n".join(f"{h}: {msg[h]}"
+                         for h in ("From", "To", "Cc", "Subject", "Date") if msg[h])
+        text = head + "\n" + "-" * 48 + "\n" + safe_text(msg)
+        atts = [(p.index, p.filename, p.size, p.content_type, p.dangerous)
+                for p in list_parts(msg) if p.is_attachment]
+        return text, atts
+
+    @staticmethod
+    def _hsize(n: int) -> str:
+        if n < 1024:
+            return f"{n} B"
+        if n < 1024 * 1024:
+            return f"{n / 1024:.1f} KB"
+        return f"{n / 1024 / 1024:.1f} MB"
+
+    def _set_attachments(self, key: str | None, atts: list) -> None:
+        while self._att_lay.count():
+            w = self._att_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        if not key or not atts:
+            self.att_bar.hide()
+            return
+        self._att_lay.addWidget(QLabel("Ekler:"))
+        for ix, fn, size, ct, danger in atts:
+            b = QPushButton(("[!] " if danger else "[EK] ") + fn)
+            b.setToolTip(f"{ct} · {self._hsize(size)}"
+                         + ("  ·  riskli tür — dikkatli aç" if danger else ""))
+            b.clicked.connect(
+                lambda _=False, k=key, i=ix, name=fn: self._save_attachment(k, i, name))
+            self._att_lay.addWidget(b)
+        self._att_lay.addStretch(1)
+        self.att_bar.show()
+
+    def _save_attachment(self, key: str, index: int, filename: str) -> None:
+        start = str(Path.home() / filename)
+        dest, _ = QFileDialog.getSaveFileName(self, "Eki kaydet", start)
+        if not dest:
+            return
+        folder = self.folder
+        self.status.showMessage(f"kaydediliyor: {filename} …")
+
+        def work():
+            msg = self.backend.get(folder, key)
+            for i, part in enumerate(msg.walk()):
+                if i == index and not part.is_multipart():
+                    Path(dest).write_bytes(part.get_payload(decode=True) or b"")
+                    return dest
+            raise ValueError("ek parçası bulunamadı")
+
+        w = _Worker(work)
+        w.ok.connect(lambda p: self.status.showMessage(f"kaydedildi: {p}"))
+        w.fail.connect(lambda m: QMessageBox.warning(self, "Kaydedilemedi", m))
+        w.finished.connect(lambda: self._render_jobs.discard(w))
+        self._render_jobs.add(w)
+        w.start()
+
     def _render_selected(self) -> None:
         key = self._selected_key()
         if not key:
             self.body.setPlainText("")
+            self._set_attachments(None, [])
             return
-        try:
-            if self._raw:
-                self.body.setPlainText(
-                    self.backend.get_bytes(self.folder, key).decode("utf-8", "replace"))
-            else:
-                msg = self.backend.get(self.folder, key)
-                head = "\n".join(f"{h}: {msg[h]}"
-                                 for h in ("From", "To", "Cc", "Subject", "Date") if msg[h])
-                self.body.setPlainText(head + "\n" + "-" * 48 + "\n" + safe_text(msg))
-            if self.folder == "INBOX":
-                self.backend.mark_seen(self.folder, key, True)
-        except Exception as e:  # noqa: BLE001
-            self.body.setPlainText(f"(mesaj alınamadı: {e})")
+        folder, raw = self.folder, self._raw
+        ck = (folder, key, raw)
+        cached = self._body_cache.get(ck)
+        if cached is not None:
+            text, atts = cached
+            self.body.setPlainText(text)
+            self._set_attachments(key, atts)
+            if folder == "INBOX":
+                self._mark_seen_async(key)
+            return
+
+        self._render_seq += 1
+        seq = self._render_seq
+        self.body.setPlainText("mesaj açılıyor…")
+        self._set_attachments(None, [])
+
+        def done(result) -> None:
+            if seq != self._render_seq:
+                return  # kullanıcı bu arada başka satıra geçti
+            text, atts = result
+            if len(self._body_cache) > 200:
+                self._body_cache.clear()
+            self._body_cache[ck] = (text, atts)
+            self.body.setPlainText(text)
+            self._set_attachments(key, atts)
+            if folder == "INBOX":
+                self._mark_seen_async(key)
+
+        def fail(msg: str) -> None:
+            if seq == self._render_seq:
+                self.body.setPlainText(f"(mesaj alınamadı: {msg})")
+
+        w = _Worker(lambda: self._render_body(folder, key, raw))
+        w.ok.connect(done)
+        w.fail.connect(fail)
+        w.finished.connect(lambda: self._render_jobs.discard(w))
+        self._render_jobs.add(w)
+        w.start()
+
+    def _mark_seen_async(self, key: str) -> None:
+        """Okundu işaretini arka planda yolla; satırdaki » imini hemen kaldır."""
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it and it.data(Qt.ItemDataRole.UserRole) == key:
+                if it.text().startswith("» "):
+                    it.setText(it.text()[2:])
+                break
+        w = _Worker(lambda: self.backend.mark_seen("INBOX", key, True))
+        w.finished.connect(lambda: self._render_jobs.discard(w))
+        self._render_jobs.add(w)
+        w.start()
 
     def _auto_refresh(self) -> None:
-        if self.folder != "INBOX":
+        if self.folder != "INBOX" or self._auto_busy:
             return
-        try:
-            rows = self.backend.list("INBOX")
-        except Exception:  # noqa: BLE001
-            return
-        keys = {s.key for s in rows}
-        new = (keys - self._inbox_keys) if self._inbox_seeded else set()
-        if keys != self._inbox_keys:
-            self.reload(select=not new)
-        if new:
-            self._notify_new(new)
+        self._auto_busy = True
+
+        def done(rows) -> None:
+            self._auto_busy = False
+            if self.folder != "INBOX":
+                return
+            keys = {s.key for s in rows}
+            new = (keys - self._inbox_keys) if self._inbox_seeded else set()
+            if keys != self._inbox_keys:
+                self.reload(select=not new)
+            if new:
+                self._notify_new(new)
+
+        w = _Worker(lambda: self.backend.list("INBOX"))
+        w.ok.connect(done)
+        w.fail.connect(lambda *_: setattr(self, "_auto_busy", False))
+        w.finished.connect(lambda: self._render_jobs.discard(w))
+        self._render_jobs.add(w)
+        w.start()
 
     # -- new-mail flash + chime ---------------------------------------
     def _notify_new(self, new_keys: set) -> None:
@@ -900,6 +1048,8 @@ class MessagerWindow(QMainWindow):
             except Exception as e:  # noqa: BLE001
                 self.status.showMessage(f"silinemedi: {e}")
                 break
+        dead = set(keys)
+        self._body_cache = {k: v for k, v in self._body_cache.items() if k[1] not in dead}
         self.reload()
         self.status.showMessage(f"{n} mesaj silindi  [{self.folder}]")
 

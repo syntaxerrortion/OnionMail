@@ -54,6 +54,12 @@ def deliver_one(raw: bytes, mail_from: str, rcpt: str, cfg: Config) -> None:
     _, _, onion = rcpt.rpartition("@")
     our_onion = cfg.identity.resolve_onion() or "onionmail"
 
+    # smtplib.SMTP.data() dot-stuffs but does NOT fix line endings for bytes
+    # input. Messages serialised with email's default policy use bare "\n", so
+    # the receiving SMTP server sees one huge line -> 500 "Line too long"
+    # (RFC 5321 4.5.3.1.6). Normalise every line ending to CRLF here.
+    raw = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
     sock = _socks_connect(onion, 25, cfg)
     smtp = smtplib.SMTP(local_hostname=our_onion, timeout=cfg.sender.timeout)
     smtp.sock = sock
