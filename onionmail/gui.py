@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from .backend import Backend, LocalBackend, NetBackend
 from .compose import build_message
 from .config import Config
-from .netclient import NetClient, NetError
+from .netclient import AuthError, NetClient, NetError
 from .sandbox import (
     backend_available, extract_part, list_parts, open_attachment, safe_text,
 )
@@ -714,12 +714,15 @@ class SettingsDialog(QDialog):
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class MessagerWindow(QMainWindow):
+    auth_lost = Signal()   # sunucu oturumu reddetti (ör. sunucu yeniden başladı)
+
     def __init__(self, cfg: Config, backend: Backend):
         super().__init__()
         self.cfg = cfg
         self.backend = backend
         self.folder_ix = 0
         self._raw = False
+        self._auth_dead = False
         self._rows: list = []
         self._children: list = []
         self._worker: _Worker | None = None
@@ -835,10 +838,39 @@ class MessagerWindow(QMainWindow):
     def folder(self) -> str:
         return FOLDERS[self.folder_ix]
 
+    def _on_auth_lost(self) -> None:
+        """Sunucu oturumu reddetti (ör. sunucu yeniden başladı) — oturumu
+        temizle, Giriş ekranına dön."""
+        if self._auth_dead:
+            return
+        self._auth_dead = True
+        try:
+            self._auto.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        clear_session(self.cfg)
+        self.status.showMessage("oturum sunucuda geçersiz — yeniden giriş gerekiyor")
+        QMessageBox.information(
+            self, "Oturum sona erdi",
+            "Sunucu oturumu kabul etmedi (sunucu yeniden başlamış olabilir).\n"
+            "Tekrar giriş yapın.")
+        self.auth_lost.emit()
+
     def reload(self, select: bool = True) -> None:
+        if self._auth_dead:
+            return
         prev_key = None if select else self._selected_key()
         try:
             self._rows = self.backend.list(self.folder)
+        except AuthError:
+            self._on_auth_lost()
+            return
+        except NetError as e:
+            if "not authenticated" in str(e).lower():
+                self._on_auth_lost()
+                return
+            self.status.showMessage(f"liste alınamadı: {e}")
+            return
         except Exception as e:  # noqa: BLE001
             self.status.showMessage(f"liste alınamadı: {e}")
             return
@@ -1013,7 +1045,7 @@ class MessagerWindow(QMainWindow):
         w.start()
 
     def _auto_refresh(self) -> None:
-        if self.folder != "INBOX" or self._auto_busy:
+        if self._auth_dead or self.folder != "INBOX" or self._auto_busy:
             return
         self._auto_busy = True
 
@@ -1264,9 +1296,23 @@ def run(cfg: Config, local: bool = False) -> None:
     app.setStyleSheet(QSS)
     app._refs = []  # keep windows alive
 
+    def open_login() -> None:
+        login = LoginWindow(cfg)
+        app._refs.append(login)
+        login.logged_in.connect(lambda c: open_main(NetBackend(c)))
+        login.show()
+
     def open_main(backend: Backend) -> None:
         win = MessagerWindow(cfg, backend)
         app._refs.append(win)
+
+        def _relogin() -> None:
+            win.close()
+            if win in app._refs:
+                app._refs.remove(win)
+            open_login()
+
+        win.auth_lost.connect(_relogin)
         win.show()
 
     # --local: doğrudan Maildir. Aksi halde ağ modu: oturum varsa NetBackend,
@@ -1279,8 +1325,5 @@ def run(cfg: Config, local: bool = False) -> None:
     if sess:
         open_main(NetBackend(client_from_session(sess)))
     else:
-        login = LoginWindow(cfg)
-        app._refs.append(login)
-        login.logged_in.connect(lambda c: open_main(NetBackend(c)))
-        login.show()
+        open_login()
     sys.exit(app.exec())

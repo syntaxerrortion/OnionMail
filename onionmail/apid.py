@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
+import os
 import secrets
 import socketserver
 import threading
@@ -40,6 +42,31 @@ class _Server(socketserver.ThreadingTCPServer):
         self.ttl = cfg.accounts.session_ttl
         self._sessions: dict[str, tuple[str, float]] = {}  # token -> (user, expiry)
         self._slock = threading.Lock()
+        self._sfile = cfg.accounts.store_path_p / "sessions.json"
+        self._load_sessions()
+
+    # session persistence (apid yeniden başlasa/sunucu reboot olsa da jeton kalsın)
+    def _load_sessions(self) -> None:
+        try:
+            raw = json.loads(self._sfile.read_text())
+        except (OSError, ValueError):
+            return
+        now = time.time()
+        self._sessions = {
+            t: (u, e) for t, (u, e) in raw.items()
+            if isinstance(e, (int, float)) and e > now
+        }
+
+    def _save_sessions(self) -> None:
+        """`_slock` tutulurken çağrılır."""
+        try:
+            self._sfile.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._sfile.parent / (self._sfile.name + ".tmp")
+            tmp.write_text(json.dumps(self._sessions))
+            os.chmod(tmp, 0o600)
+            tmp.replace(self._sfile)
+        except OSError as e:  # noqa: BLE001
+            log.warning("oturum dosyası yazılamadı: %s", e)
 
     # session helpers ---------------------------------------------------
     def new_session(self, user: str) -> tuple[str, float]:
@@ -47,6 +74,7 @@ class _Server(socketserver.ThreadingTCPServer):
         exp = time.time() + self.ttl
         with self._slock:
             self._sessions[token] = (user, exp)
+            self._save_sessions()
         return token, exp
 
     def session_user(self, token: str) -> str | None:
@@ -57,12 +85,14 @@ class _Server(socketserver.ThreadingTCPServer):
             user, exp = rec
             if exp < time.time():
                 self._sessions.pop(token, None)
+                self._save_sessions()
                 return None
             return user
 
     def drop_session(self, token: str) -> None:
         with self._slock:
-            self._sessions.pop(token or "", None)
+            if self._sessions.pop(token or "", None) is not None:
+                self._save_sessions()
 
 
 class _Handler(socketserver.StreamRequestHandler):
