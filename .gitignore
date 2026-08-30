@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+tor/
+tor_dl/
+*.spec.bak
+# yerel istemci durumu
+*.session.json

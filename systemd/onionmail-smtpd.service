@@ -1,0 +1,30 @@
+[Unit]
+Description=onionmail inbound SMTP server
+After=network.target tor.service
+Wants=tor.service
+
+[Service]
+Type=simple
+User=onionmail
+Group=onionmail
+# Tor's hostname file must be readable by this user (see docs/tor-setup.md).
+Environment=ONIONMAIL_CONFIG=/etc/onionmail/config.toml
+ExecStart=/opt/onionmail/.venv/bin/python -m onionmail smtpd
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/onionmail
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+MemoryDenyWriteExecute=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

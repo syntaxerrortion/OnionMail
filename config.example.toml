@@ -1,0 +1,67 @@
+# onionmail yapılandırması. Kopyala: ~/.config/onionmail/config.toml
+# Yol öncelik sırası: --config BAYRAĞI > ONIONMAIL_CONFIG env > ~/.config/onionmail/config.toml
+
+[identity]
+# Kendi onion adresin. Boş bırakırsan hostname_file'dan okunur (Tor bunu üretir).
+onion = ""
+hostname_file = "/var/lib/tor/onionmail/hostname"
+# <local_user>@<onion> adresine gelen mailler kabul edilir.
+local_user = "nejarm"
+# Kabul edilecek ek tam adresler (ör. takma adlar).
+extra_addresses = []
+
+[smtpd]
+# Tor'un HiddenServicePort'u buraya yönlendirir. ASLA 0.0.0.0'a açma.
+host = "127.0.0.1"
+port = 8025
+max_message_bytes = 26214400   # 25 MiB
+max_rcpt = 10
+
+[sender]
+socks_host = "127.0.0.1"
+socks_port = 9050              # Tor SOCKS; Tor Browser kullanıyorsan 9150
+timeout = 120                 # onion yavaş olabilir, cömert tut
+# Başarısız teslimde tekrar deneme aralıkları (saniye). Son değer sonrası vazgeçilir.
+retry_delays = [60, 300, 900, 3600, 10800, 43200]
+
+[storage]
+maildir = "~/.local/share/onionmail/Maildir"
+
+[policy]
+# true ise, yalnızca allowed_sender_onions listesindeki onion'lardan mail kabul edilir.
+allowlist_only = false
+allowed_sender_onions = []
+
+# ------------------------------------------------------------------------
+# ÇOK KULLANICILI MOD (ağdan login). Kapalıysa tek kutu = [identity].local_user.
+# ------------------------------------------------------------------------
+[accounts]
+enabled = false                                   # true: her kullanıcı ayrı hesap
+store_path = "~/.local/share/onionmail/accounts"  # dm1'de: /var/lib/onionmail/accounts
+open_registration = false                         # false: kayıt davet kodu ister
+session_ttl = 3600                                # oturum token'ı ömrü (sn)
+max_failed = 5                                    # bu kadar hatalı girişten sonra kilit
+lock_minutes = 15
+min_password_len = 8
+
+[api]
+# apid servisi. Tor bunu 2. bir HiddenServicePort ile aynı .onion'da yayınlar.
+host = "127.0.0.1"
+port = 8443
+preshared_key = ""                               # boş değilse istemci de vermeli
+
+# ------------------------------------------------------------------------
+# İSTEMCİ tarafı (GUI'nin çalıştığı makinede). Sunucuda gerekmez.
+# GUI Settings paneli bunları ~/.config/onionmail/client.json'a da yazabilir.
+# ------------------------------------------------------------------------
+[client]
+server_onion = ""                                # bağlanılacak sunucunun .onion'u
+preshared_key = ""
+session_path = "~/.config/onionmail/session.json"
+
+[sandbox]
+# Güvenilmeyen ekleri/HTML'i izole ortamda açmak için.
+backend = "firejail"          # "firejail" | "bwrap" | "none"
+workdir = "~/.cache/onionmail/sandbox"
+# Ek açarken kullanılacak görüntüleyici. Sandbox içinde çalışır.
+viewer = "xdg-open"

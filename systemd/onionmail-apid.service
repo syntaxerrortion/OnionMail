@@ -1,0 +1,27 @@
+[Unit]
+Description=onionmail account & mail API (2nd onion port)
+After=network.target tor.service
+Wants=tor.service
+
+[Service]
+Type=simple
+User=onionmail
+Group=onionmail
+Environment=ONIONMAIL_CONFIG=/etc/onionmail/config.toml
+ExecStart=/opt/onionmail/.venv/bin/python -m onionmail apid
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/onionmail
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
