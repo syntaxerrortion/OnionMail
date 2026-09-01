@@ -1216,18 +1216,49 @@ class MessagerWindow(QMainWindow):
             )
             if yes != QMessageBox.StandardButton.Yes:
                 return
-        n = 0
-        for k in keys:
+
+        folder = self.folder
+        one = len(keys) == 1
+        result = {"n": 0, "err": False}
+        finished = threading.Event()
+
+        def work(is_cancelled):
             try:
-                self.backend.delete(self.folder, k)
-                n += 1
-            except Exception as e:  # noqa: BLE001
-                self.status.showMessage(f"silinemedi: {e}")
-                break
-        dead = set(keys)
-        self._body_cache = {k: v for k, v in self._body_cache.items() if k[1] not in dead}
-        self.reload()
-        self.status.showMessage(f"{n} mesaj silindi  [{self.folder}]")
+                for k in keys:
+                    if is_cancelled():
+                        return          # iptal: o ana kadar silinenler kalır
+                    self.backend.delete(folder, k)
+                    result["n"] += 1
+            except Exception:
+                result["err"] = True
+                raise
+            finally:
+                finished.set()
+
+        ok = run_busy(
+            self, "Mesaj siliniyor" if one else f"{len(keys)} mesaj siliniyor", work,
+            ok_text="Mesaj silindi" if one else f"{len(keys)} mesaj silindi",
+            err_text="Silme başarısız")
+        # iptal anında worker hâlâ bir silmeyi bitiriyor olabilir; sayaç
+        # netleşsin diye kısaca bekle (diyalog zaten kapandı).
+        finished.wait(3.0)
+
+        done_n = result["n"]
+        if done_n:
+            dead = set(keys[:done_n])
+            self._body_cache = {k: v for k, v in self._body_cache.items()
+                                if k[1] not in dead}
+            self.reload()
+        if ok:
+            self.status.showMessage(f"{done_n} mesaj silindi  [{self.folder}]", 6000)
+        elif result["err"]:
+            self.status.showMessage(
+                f"{done_n}/{len(keys)} silindi, sonra hata  [{self.folder}]", 8000)
+        elif done_n:
+            QMessageBox.information(
+                self, "Silme durduruldu",
+                f"{done_n}/{len(keys)} mesaj silindi, kalanı durduruldu.  "
+                f"[{self.folder}]")
 
     def _table_menu(self, pos) -> None:
         m = QMenu(self)
