@@ -156,6 +156,35 @@ def test_authed_op_without_token_fails(server):
         c.list("INBOX")
 
 
+def test_pubkey_directory(server):
+    cfg, srv = server
+    code = srv.accounts.new_invite()
+    c = _client(cfg)
+    c.register("neo", "correct horse", code)
+    c.login("neo", "correct horse")
+
+    assert c.pubkey_get(f"neo@{ONION}") is None          # henüz yayınlamadı
+    c.pubkey_set("age1" + "q" * 55)
+    assert c.pubkey_get(f"neo@{ONION}") == "age1" + "q" * 55
+    assert c.pubkey_get("neo") == "age1" + "q" * 55       # localpart de olur
+    assert c.pubkey_get(f"stranger@{PEER}") is None       # başka sunucu
+    assert c.pubkey_get(f"ghost@{ONION}") is None         # yok olan hesap
+
+    with pytest.raises(NetError):
+        c.pubkey_set("not-an-age-key")
+
+    assert srv.accounts.get_pubkey("neo") == "age1" + "q" * 55
+
+
+def test_pubkey_ops_need_auth(server):
+    cfg, _ = server
+    c = _client(cfg)
+    with pytest.raises(AuthError):
+        c.pubkey_get(f"neo@{ONION}")
+    with pytest.raises(AuthError):
+        c.pubkey_set("age1xxx")
+
+
 def test_psk_gate(tmp_path: Path):
     from onionmail.apid import build_server
 

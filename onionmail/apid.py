@@ -222,6 +222,20 @@ class _Handler(socketserver.StreamRequestHandler):
             store.mark_seen(str(req["folder"]), str(req["key"]), bool(req.get("seen", True)))
             return P.ok()
 
+        if op == P.OP_PUBKEY_SET:
+            pk = str(req.get("public", "")).strip()
+            if not pk.startswith("age1"):
+                return P.err("geçersiz age açık anahtarı")
+            self.srv.accounts.set_pubkey(user, pk)
+            return P.ok()
+
+        if op == P.OP_PUBKEY_GET:
+            addr = str(req.get("address", "")).strip().lower()
+            localpart, _, dom = addr.partition("@")
+            if dom and self.srv.onion and dom != self.srv.onion:
+                return P.ok(public=None)  # başka sunucu — bu apid yalnızca kendi hesaplarını bilir
+            return P.ok(public=self.srv.accounts.get_pubkey(localpart or addr))
+
         return P.err(f"unhandled op: {op}")
 
 

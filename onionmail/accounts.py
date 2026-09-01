@@ -162,3 +162,17 @@ class Accounts:
             data = self._read()
             data["users"].pop(user, None)
             self._write(data)
+
+    # -- age açık anahtar dizini (uçtan uca şifreleme) ---------------
+    def set_pubkey(self, user: str, pubkey: str) -> None:
+        user = user.strip().lower()
+        with self._lock:
+            data = self._read()
+            if user not in data["users"]:
+                raise AccountError(f"no such account: {user}")
+            data["users"][user]["age_pubkey"] = pubkey.strip()
+            self._write(data)
+
+    def get_pubkey(self, user: str) -> str | None:
+        rec = self._read()["users"].get(user.strip().lower())
+        return (rec or {}).get("age_pubkey") or None

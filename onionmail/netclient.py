@@ -132,3 +132,9 @@ class NetClient:
 
     def mark_seen(self, folder: str, key: str, seen: bool = True) -> None:
         self._auth_rpc(P.OP_MARK_SEEN, folder=folder, key=key, seen=seen)
+
+    def pubkey_set(self, public: str) -> None:
+        self._auth_rpc(P.OP_PUBKEY_SET, public=public)
+
+    def pubkey_get(self, address: str) -> str | None:
+        return self._auth_rpc(P.OP_PUBKEY_GET, address=address).get("public")
