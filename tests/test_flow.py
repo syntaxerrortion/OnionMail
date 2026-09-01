@@ -165,6 +165,38 @@ def test_multiuser_send_lands_in_account_queue(cfg: Config, tmp_path: Path, monk
     assert len(store.list("Sent")) == 1
 
 
+def test_encrypted_queue_hides_body_and_bcc(cfg: Config):
+    """queue_message(encrypt_to=...) kuyruğa şifreli zarf koyar; gövde de BCC de
+    (şifreli parçanın içinde bile) sızmaz."""
+    pytest.importorskip("pyrage")
+    from onionmail import crypto
+    from onionmail.compose import (
+        build_message, decrypt_message, is_encrypted, queue_message,
+    )
+
+    store = Store(cfg.storage.maildir_path)
+    a_sec, a_pub = crypto.generate_identity()
+    _, b_pub = crypto.generate_identity()
+
+    inner = build_message(cfg, to=[f"to@{PEER}"], subject="özel", body="gizli metin")
+    queue_message(cfg, store, inner, bcc=[f"hidden@{PEER}"], encrypt_to=[a_pub, b_pub])
+
+    q = store.queue()
+    assert len(q) == 1
+    assert set(q[0].rcpts) == {f"to@{PEER}", f"hidden@{PEER}"}
+
+    key = store.list("Outbox")[0].key
+    raw = store.get_bytes("Outbox", key)
+    assert b"hidden@" not in raw
+    assert "gizli metin".encode() not in raw
+    assert is_encrypted(store.get("Outbox", key))
+
+    back = decrypt_message(store.get("Outbox", key), a_sec)
+    assert back["Subject"] == "özel"
+    assert back["Bcc"] is None
+    assert back["To"] == f"to@{PEER}"
+
+
 def test_sandbox_parts_and_html(cfg: Config):
     from onionmail.sandbox import list_parts, safe_text, sanitize_filename
 

@@ -77,3 +77,55 @@ def test_seal_rejects_empty_password():
     sec, _ = crypto.generate_identity()
     with pytest.raises(crypto.CryptoError):
         crypto.seal_secret(sec, "")
+
+
+# --- mesaj sarma (compose.py ile) --------------------------------------
+
+def _cfg():
+    from onionmail.config import Config
+
+    c = Config()
+    c.identity.onion = "a" * 56 + ".onion"
+    c.identity.local_user = "me"
+    return c
+
+
+def test_wrap_and_decrypt_message():
+    from onionmail.compose import (
+        build_message, decrypt_message, is_encrypted, wrap_encrypted,
+    )
+
+    cfg = _cfg()
+    peer = "b" * 56 + ".onion"
+    a_sec, a_pub = crypto.generate_identity()
+    b_sec, b_pub = crypto.generate_identity()
+
+    inner = build_message(cfg, to=[f"friend@{peer}"], subject="GİZLİ KONU",
+                          body="gövde satırı", from_user="me")
+    outer = wrap_encrypted(inner, [a_pub, b_pub])
+
+    assert is_encrypted(outer)
+    assert outer["Subject"] == "[şifreli mesaj]"
+    assert str(outer["From"]) == "me@" + "a" * 56 + ".onion"
+
+    raw = outer.as_bytes()
+    assert "GİZLİ KONU".encode() not in raw
+    assert "gövde satırı".encode() not in raw
+
+    for sec in (a_sec, b_sec):
+        got = decrypt_message(outer, sec)
+        assert got["Subject"] == "GİZLİ KONU"
+        assert "gövde satırı" in got.get_content()
+
+
+def test_decrypt_message_wrong_key():
+    from onionmail.compose import build_message, decrypt_message, wrap_encrypted
+
+    _, a_pub = crypto.generate_identity()
+    other_sec, _ = crypto.generate_identity()
+    outer = wrap_encrypted(
+        build_message(_cfg(), to=["x@" + "b" * 56 + ".onion"], subject="s", body="b"),
+        [a_pub],
+    )
+    with pytest.raises(crypto.CryptoError):
+        decrypt_message(outer, other_sec)
