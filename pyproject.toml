@@ -13,7 +13,8 @@ dependencies = [
 [project.optional-dependencies]
 gui = ["PySide6>=6.6"]
 pgp = ["python-gnupg>=0.5"]
-dev = ["pytest>=8"]
+e2e = ["pyrage>=1.4"]
+dev = ["pytest>=8", "pyrage>=1.4"]
 
 [project.scripts]
 onionmail = "onionmail.__main__:main"
