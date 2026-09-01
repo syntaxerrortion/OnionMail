@@ -95,40 +95,88 @@ def cmd_gui(args) -> int:
     return 0
 
 
+def _resolve_account(cfg, user_arg: str | None) -> str:
+    """Çok kullanıcılı modda CLI mesajını hangi hesabın göndereceğini seç."""
+    from .accounts import Accounts
+
+    users = Accounts(cfg.accounts.store_path_p).list_users()
+    if not users:
+        raise ValueError("hesap yok (accounts.enabled=true ama kayıtlı kullanıcı yok)")
+    if user_arg:
+        u = user_arg.strip().lower()
+        if u not in users:
+            raise ValueError(f"böyle bir hesap yok: {user_arg}  "
+                             f"(var olanlar: {', '.join(users)})")
+        return u
+    lu = (cfg.identity.local_user or "").lower()
+    if lu in users:
+        return lu
+    if len(users) == 1:
+        return users[0]
+    raise ValueError(f"birden çok hesap var, --from ile seç: {', '.join(users)}")
+
+
 def cmd_send(args) -> int:
+    from .accounts import Accounts
     from .compose import build_message, queue_message
     from .store import Store
 
     cfg = _load(args)
     body = sys.stdin.read() if not args.body_file else Path(args.body_file).read_text()
+
+    if cfg.accounts.enabled:
+        user = _resolve_account(cfg, args.from_user)
+        store = Store(Accounts(cfg.accounts.store_path_p).maildir_for(user))
+    else:
+        user = None
+        store = Store(cfg.storage.maildir_path)
+
     msg = build_message(
         cfg,
         to=args.to,
         subject=args.subject,
         body=body,
         attachments=[Path(a) for a in args.attach or []],
+        from_user=user,
     )
-    store = Store(cfg.storage.maildir_path)
     queue_message(cfg, store, msg)
-    print("kuyruğa alındı; 'onionmail sender' çalışıyorsa gönderilecek")
+    who = f"{user}@{cfg.identity.resolve_onion() or '<onion>'}" if user else "yerel kutu"
+    print(f"kuyruğa alındı ({who}); 'onionmail sender' çalışıyorsa gönderilecek")
     return 0
 
 
 def cmd_status(args) -> int:
     import socket
 
+    from .accounts import Accounts
     from .store import Store
 
     cfg = _load(args)
     onion = cfg.identity.resolve_onion()
-    store = Store(cfg.storage.maildir_path)
-    q = store.queue()
 
     print(f"config       : {cfg.source_path or '(defaults)'}")
     print(f"onion        : {onion or '(bilinmiyor — Tor ayakta mı?)'}")
-    print(f"maildir      : {cfg.storage.maildir_path}")
-    print(f"inbox        : {len(store.list('INBOX'))} mesaj")
-    print(f"kuyruk       : {len(q)} bekleyen, {sum(len(e.rcpts) for e in q)} alıcı")
+
+    if cfg.accounts.enabled:
+        acc = Accounts(cfg.accounts.store_path_p)
+        users = acc.list_users()
+        print(f"mod          : çok kullanıcılı ({len(users)} hesap)")
+        tin = tq = tr = 0
+        for u in users:
+            st = Store(acc.maildir_for(u))
+            q = st.queue()
+            nin, nq = len(st.list("INBOX")), len(q)
+            nr = sum(len(e.rcpts) for e in q)
+            tin += nin; tq += nq; tr += nr
+            print(f"  {u:<16} inbox:{nin:<4} kuyruk:{nq} ({nr} alıcı)")
+        print(f"toplam       : inbox {tin}, kuyruk {tq} bekleyen, {tr} alıcı")
+    else:
+        store = Store(cfg.storage.maildir_path)
+        q = store.queue()
+        print("mod          : tek kutu")
+        print(f"maildir      : {cfg.storage.maildir_path}")
+        print(f"inbox        : {len(store.list('INBOX'))} mesaj")
+        print(f"kuyruk       : {len(q)} bekleyen, {sum(len(e.rcpts) for e in q)} alıcı")
 
     sock = socket.socket()
     sock.settimeout(2)
@@ -204,6 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--subject", default="(konu yok)")
     sp.add_argument("--body-file", help="gövde dosyası (yoksa stdin)")
     sp.add_argument("--attach", action="append", help="eklenecek dosya (tekrarlanabilir)")
+    sp.add_argument("--from", dest="from_user", metavar="KULLANICI",
+                    help="çok kullanıcılı modda gönderen hesap (yoksa local_user / tek hesap)")
     sp.set_defaults(func=cmd_send)
 
     sp = sub.add_parser("status", help="durum özeti")

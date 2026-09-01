@@ -26,9 +26,10 @@ def build_message(
     cc: list[str] | None = None,
     attachments: list[Path] | None = None,
     in_reply_to: str | None = None,
+    from_user: str | None = None,
 ) -> EmailMessage:
     onion = cfg.identity.resolve_onion() or "onionmail"
-    from_addr = f"{cfg.identity.local_user}@{onion}"
+    from_addr = f"{from_user or cfg.identity.local_user}@{onion}"
 
     m = EmailMessage()
     m["From"] = from_addr

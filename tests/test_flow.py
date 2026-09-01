@@ -125,6 +125,46 @@ def test_queue_retries_on_transient_failure(cfg: Config, monkeypatch):
     assert len(store.list("Outbox")) == 1
 
 
+def test_multiuser_send_lands_in_account_queue(cfg: Config, tmp_path: Path, monkeypatch):
+    """Çok kullanıcılı modda CLI `send`, çalışan sender'ın taradığı HESAP
+    kuyruğuna yazmalı — tek-Maildir kuyruğuna değil (eski bug)."""
+    from onionmail import sender
+    from onionmail.__main__ import _resolve_account
+    from onionmail.accounts import Accounts, Policy
+    from onionmail.compose import build_message, queue_message
+
+    cfg.accounts.enabled = True
+    cfg.accounts.store_path = str(tmp_path / "accounts")
+    Accounts(cfg.accounts.store_path_p,
+             Policy(open_registration=True)).create("me", "sifre12345", invite=None)
+    acc = Accounts(cfg.accounts.store_path_p)
+
+    user = _resolve_account(cfg, None)          # identity.local_user = "me"
+    assert user == "me"
+
+    store = Store(acc.maildir_for(user))
+    msg = build_message(cfg, to=[f"friend@{PEER}"], subject="x", body="y",
+                        from_user=user)
+    assert str(msg["From"]) == f"me@{ONION}"
+    queue_message(cfg, store, msg)
+
+    assert len(Store(cfg.storage.maildir_path).queue()) == 0   # tek-Maildir boş
+    assert len(store.queue()) == 1                             # hesap kuyruğunda
+
+    stores = sender._stores(cfg)
+    assert any(s.root_path == store.root_path for s in stores)
+
+    sent: list = []
+    monkeypatch.setattr(sender, "deliver_one",
+                        lambda raw, mail_from, rcpt, c: sent.append((mail_from, rcpt)))
+    for s in stores:
+        sender.process_queue_once(cfg, s)
+
+    assert sent == [(f"me@{ONION}", f"friend@{PEER}")]
+    assert len(store.queue()) == 0
+    assert len(store.list("Sent")) == 1
+
+
 def test_sandbox_parts_and_html(cfg: Config):
     from onionmail.sandbox import list_parts, safe_text, sanitize_filename
 
