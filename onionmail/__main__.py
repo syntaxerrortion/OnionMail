@@ -118,15 +118,16 @@ def _resolve_account(cfg, user_arg: str | None) -> str:
 
 def cmd_send(args) -> int:
     from .accounts import Accounts
-    from .compose import build_message, queue_message
+    from .compose import build_message, queue_message, recipients_of
     from .store import Store
 
     cfg = _load(args)
     body = sys.stdin.read() if not args.body_file else Path(args.body_file).read_text()
 
-    if cfg.accounts.enabled:
+    accounts_obj = Accounts(cfg.accounts.store_path_p) if cfg.accounts.enabled else None
+    if accounts_obj is not None:
         user = _resolve_account(cfg, args.from_user)
-        store = Store(Accounts(cfg.accounts.store_path_p).maildir_for(user))
+        store = Store(accounts_obj.maildir_for(user))
     else:
         user = None
         store = Store(cfg.storage.maildir_path)
@@ -139,9 +140,38 @@ def cmd_send(args) -> int:
         attachments=[Path(a) for a in args.attach or []],
         from_user=user,
     )
-    queue_message(cfg, store, msg)
+
+    encrypt_to = None
+    if args.encrypt:
+        manual: dict[str, str] = {}
+        for kv in args.pubkey:
+            addr, sep, pub = kv.partition("=")
+            if not sep or not addr.strip() or not pub.strip():
+                raise SystemExit(f"--pubkey biçimi 'adres=age1...' olmalı: {kv!r}")
+            manual[addr.strip().lower()] = pub.strip()
+
+        onion = cfg.identity.resolve_onion() or ""
+        pubs, missing = [], []
+        for addr in recipients_of(msg):
+            pub = manual.get(addr)
+            if not pub and accounts_obj is not None and onion and addr.endswith("@" + onion):
+                pub = accounts_obj.get_pubkey(addr.split("@", 1)[0])
+            if pub:
+                pubs.append(pub)
+            else:
+                missing.append(addr)
+        if missing:
+            raise SystemExit(
+                "şu alıcı(lar) için age açık anahtarı bulunamadı, --encrypt "
+                "kullanılamıyor: " + ", ".join(missing) +
+                "\n(--pubkey adres=age1... ile elle ver, ya da alıcı hesap "
+                "istemciden pubkey_set yapmış olmalı)")
+        encrypt_to = pubs
+
+    queue_message(cfg, store, msg, encrypt_to=encrypt_to)
     who = f"{user}@{cfg.identity.resolve_onion() or '<onion>'}" if user else "yerel kutu"
-    print(f"kuyruğa alındı ({who}); 'onionmail sender' çalışıyorsa gönderilecek")
+    tail = " (şifreli)" if encrypt_to else ""
+    print(f"kuyruğa alındı{tail} ({who}); 'onionmail sender' çalışıyorsa gönderilecek")
     return 0
 
 
@@ -254,6 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--attach", action="append", help="eklenecek dosya (tekrarlanabilir)")
     sp.add_argument("--from", dest="from_user", metavar="KULLANICI",
                     help="çok kullanıcılı modda gönderen hesap (yoksa local_user / tek hesap)")
+    sp.add_argument("--encrypt", action="store_true",
+                    help="age ile uçtan uca şifrele (tüm alıcıların açık anahtarı gerekir)")
+    sp.add_argument("--pubkey", action="append", default=[], metavar="ADRES=AGE1ANAHTAR",
+                    help="alıcı için age açık anahtarı (tekrarlanabilir); aynı sunucudaki "
+                         "hesaplar apid'e kayıtlıysa otomatik çözülür")
     sp.set_defaults(func=cmd_send)
 
     sp = sub.add_parser("status", help="durum özeti")
