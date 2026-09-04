@@ -21,10 +21,10 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
-    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
+    QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QTabWidget,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import crypto
@@ -834,6 +834,112 @@ class SettingsDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
+#  Keys dialog — own fingerprint + known-peer (TOFU) directory                 #
+# --------------------------------------------------------------------------- #
+class KeysDialog(QDialog):
+    def __init__(self, backend: Backend, parent=None):
+        super().__init__(parent)
+        self.keys: ClientKeys | None = getattr(backend, "keys", None)
+        self.setWindowTitle("Anahtarlar — uçtan uca şifreleme")
+        self.resize(640, 460)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(QLabel("Anahtarlar", objectName="modalTitle"))
+        box = QWidget(); lay.addWidget(box, 1)
+        v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
+
+        if self.keys and self.keys.unlocked:
+            v.addWidget(QLabel(f"Kendi adresin: {self.keys.address}"))
+            v.addWidget(QLabel(f"Parmak izin: {crypto.fingerprint(self.keys.public)}"))
+        else:
+            v.addWidget(QLabel(
+                "Bu oturumda uçtan uca şifreleme kimliği açık değil "
+                "(pyrage kurulu değil ya da giriş sırasında anahtar açılamadı)."))
+
+        v.addWidget(QLabel("Bilinen eşler (TOFU):", objectName="fieldLabel"))
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Adres", "Parmak izi", "Doğrulanmış", "Kaynak"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        v.addWidget(self.table, 1)
+        self._reload_table()
+
+        row = QHBoxLayout()
+        b_add = QPushButton("Elle ekle / değişikliği kabul et")
+        b_add.clicked.connect(self._add)
+        b_verify = QPushButton("Doğrulandı / değil işaretle")
+        b_verify.clicked.connect(self._toggle_verified)
+        b_forget = QPushButton("Unut")
+        b_forget.clicked.connect(self._forget)
+        for b in (b_add, b_verify, b_forget):
+            b.setEnabled(self.keys is not None)
+            row.addWidget(b)
+        row.addStretch(1)
+        b_close = QPushButton("Kapat")
+        b_close.clicked.connect(self.accept)
+        row.addWidget(b_close)
+        v.addLayout(row)
+
+    def _reload_table(self) -> None:
+        peers = self.keys.all_peers() if self.keys else {}
+        addrs = sorted(peers)
+        self.table.setRowCount(len(addrs))
+        for r, addr in enumerate(addrs):
+            info = peers[addr]
+            for c, val in enumerate((
+                addr, info.get("fingerprint", ""),
+                "evet" if info.get("verified") else "hayır", info.get("source", ""),
+            )):
+                self.table.setItem(r, c, QTableWidgetItem(val))
+        self.table.resizeColumnsToContents()
+
+    def _sel_addr(self) -> str | None:
+        r = self.table.currentRow()
+        if r < 0:
+            return None
+        it = self.table.item(r, 0)
+        return it.text() if it else None
+
+    def _add(self) -> None:
+        if not self.keys:
+            return
+        addr, ok = QInputDialog.getText(self, "Elle ekle", "Adres (kisi@<56 karakter>.onion):")
+        if not ok or not addr.strip():
+            return
+        pub, ok = QInputDialog.getText(self, "Elle ekle", "age açık anahtarı (age1…):")
+        if not ok or not pub.strip():
+            return
+        try:
+            self.keys.set_peer(addr.strip().lower(), pub.strip(), verified=True, source="manual")
+        except crypto.CryptoError as e:
+            QMessageBox.warning(self, "Geçersiz anahtar", str(e))
+            return
+        self._reload_table()
+
+    def _toggle_verified(self) -> None:
+        addr = self._sel_addr()
+        if not addr or not self.keys:
+            return
+        info = self.keys.peer_info(addr) or {}
+        self.keys.mark_verified(addr, not info.get("verified", False))
+        self._reload_table()
+
+    def _forget(self) -> None:
+        addr = self._sel_addr()
+        if not addr or not self.keys:
+            return
+        yes = QMessageBox.question(
+            self, "Unut", f"{addr} için kayıtlı anahtar silinsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if yes == QMessageBox.StandardButton.Yes:
+            self.keys.forget_peer(addr)
+            self._reload_table()
+
+
+# --------------------------------------------------------------------------- #
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class MessagerWindow(QMainWindow):
@@ -939,6 +1045,7 @@ class MessagerWindow(QMainWindow):
         mb.setNativeMenuBar(False)
         for label, slot in (
             ("Email", self.act_compose),
+            ("Keys", self.act_keys),
             ("Settings", self.act_settings),
             ("Help", self.act_help),
         ):
@@ -1452,6 +1559,9 @@ class MessagerWindow(QMainWindow):
         key = self._selected_key()
         if key:
             CollectorDialog(self.cfg, self.backend, self.folder, key, self).exec()
+
+    def act_keys(self) -> None:
+        KeysDialog(self.backend, self).exec()
 
     def act_settings(self) -> None:
         dlg = SettingsDialog(self.cfg, self.backend, self)
