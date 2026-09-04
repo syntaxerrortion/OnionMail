@@ -12,7 +12,7 @@ from email import policy as _epol
 from email.message import EmailMessage
 from email.parser import BytesParser
 
-from .compose import queue_message, recipients_of
+from .compose import queue_message, recipients_of, wrap_encrypted
 from .config import Config
 from .netclient import NetClient
 from .store import FOLDERS, Store, Summary
@@ -46,7 +46,8 @@ class Backend(abc.ABC):
     def mark_seen(self, folder: str, key: str, seen: bool = True) -> None: ...
 
     @abc.abstractmethod
-    def send(self, msg: EmailMessage, bcc: list[str] | None = None) -> int: ...
+    def send(self, msg: EmailMessage, bcc: list[str] | None = None,
+              encrypt_to: list[str] | None = None) -> int: ...
 
     @abc.abstractmethod
     def queue_count(self) -> int: ...
@@ -77,8 +78,9 @@ class LocalBackend(Backend):
     def mark_seen(self, folder: str, key: str, seen: bool = True) -> None:
         self.store.mark_seen(folder, key, seen)
 
-    def send(self, msg: EmailMessage, bcc: list[str] | None = None) -> int:
-        queue_message(self.cfg, self.store, msg, bcc=bcc)
+    def send(self, msg: EmailMessage, bcc: list[str] | None = None,
+             encrypt_to: list[str] | None = None) -> int:
+        queue_message(self.cfg, self.store, msg, bcc=bcc, encrypt_to=encrypt_to)
         return len(recipients_of(msg, bcc))
 
     def queue_count(self) -> int:
@@ -109,10 +111,13 @@ class NetBackend(Backend):
     def mark_seen(self, folder: str, key: str, seen: bool = True) -> None:
         self.client.mark_seen(folder, key, seen)
 
-    def send(self, msg: EmailMessage, bcc: list[str] | None = None) -> int:
+    def send(self, msg: EmailMessage, bcc: list[str] | None = None,
+             encrypt_to: list[str] | None = None) -> int:
         rcpts = recipients_of(msg, bcc)
         if "Bcc" in msg:
             del msg["Bcc"]
+        if encrypt_to:
+            msg = wrap_encrypted(msg, encrypt_to)  # istemcide sarılır — sunucu şifreleyemez
         return self.client.send(msg.as_bytes(), rcpts)
 
     def queue_count(self) -> int:

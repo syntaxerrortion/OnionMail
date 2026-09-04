@@ -16,6 +16,7 @@ from .store import Store
 ENC_HEADER = "X-Onionmail-Encrypted"
 ENC_MARKER = "age-v1"
 ENC_FILENAME = "message.age"
+PUBKEY_HEADER = "X-Onionmail-Pubkey"
 
 
 def _addr_list(value: str | list[str] | None) -> list[str]:
@@ -35,6 +36,7 @@ def build_message(
     attachments: list[Path] | None = None,
     in_reply_to: str | None = None,
     from_user: str | None = None,
+    sender_pubkey: str | None = None,
 ) -> EmailMessage:
     onion = cfg.identity.resolve_onion() or "onionmail"
     from_addr = f"{from_user or cfg.identity.local_user}@{onion}"
@@ -50,6 +52,10 @@ def build_message(
     if in_reply_to:
         m["In-Reply-To"] = in_reply_to
         m["References"] = in_reply_to
+    if sender_pubkey:
+        # Fırsatçı anahtar yayılımı: düz mesajlarda da eklenir ki alıcı TOFU
+        # dizinine göndereni kaydedebilsin.
+        m[PUBKEY_HEADER] = sender_pubkey
     m.set_content(body)
 
     for path in attachments or []:
@@ -100,6 +106,10 @@ def wrap_encrypted(inner: EmailMessage, recipient_pubkeys: list[str]) -> EmailMe
     if inner["In-Reply-To"]:
         m["In-Reply-To"] = str(inner["In-Reply-To"])
         m["References"] = str(inner["References"] or inner["In-Reply-To"])
+    if inner[PUBKEY_HEADER]:
+        # gizli değil — dış zarfta da dursun ki şifreyi çözemeyen bile
+        # göndereni TOFU'ya kaydedebilsin
+        m[PUBKEY_HEADER] = str(inner[PUBKEY_HEADER])
     m[ENC_HEADER] = ENC_MARKER
     m.set_content(blob, maintype="application", subtype="octet-stream",
                   disposition="attachment", filename=ENC_FILENAME)

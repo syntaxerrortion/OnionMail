@@ -20,17 +20,17 @@ from PySide6.QtGui import (
     QAction, QBrush, QColor, QFont, QFontMetrics, QKeySequence, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog,
-    QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
+    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import crypto
 from .backend import Backend, LocalBackend, NetBackend
 from .clientkeys import ClientKeys
-from .compose import build_message
+from .compose import build_message, recipients_of
 from .config import Config
 from .netclient import AuthError, NetClient, NetError
 from .sandbox import (
@@ -152,6 +152,15 @@ class ComposeWindow(QWidget):
         btns = QHBoxLayout()
         self.lbl_err = QLabel("Ctrl+S: gönder   ·   Esc: kapat")
         btns.addWidget(self.lbl_err, 1)
+        self.chk_encrypt = QCheckBox("🔒 Şifrele")
+        can_encrypt = bool(getattr(backend, "keys", None))
+        self.chk_encrypt.setEnabled(can_encrypt)
+        self.chk_encrypt.setToolTip(
+            "Alıcı(lar)ın açık anahtarı bulunursa mesaj uçtan uca şifrelenir."
+            if can_encrypt else
+            "Uçtan uca şifreleme bu oturumda kapalı (pyrage kurulu değil ya da "
+            "giriş sırasında anahtar açılamadı).")
+        btns.addWidget(self.chk_encrypt)
         b_cancel = QPushButton("Cancel")
         b_cancel.clicked.connect(self.close)
         b_send = QPushButton("Send")
@@ -170,31 +179,88 @@ class ComposeWindow(QWidget):
             cur = [p for p in self.e_attach.text().split(",") if p.strip()]
             self.e_attach.setText(", ".join(cur + paths))
 
+    def _resolve_pubkeys(self, addrs: list[str], is_cancelled) -> tuple[dict[str, str], list[str]]:
+        """Her alıcı için age açık anahtarını bul: önce TOFU önbelleği, yoksa
+        (uzak backend ise) sunucudan sor + önbelleğe al. Zaten bilinen bir
+        anahtar sunucudakiyle farklıysa TOFU'yu sessizce değiştirmeyiz —
+        stored (eski) anahtar kullanılmaya devam eder."""
+        keys = self.backend.keys
+        client = getattr(self.backend, "client", None)
+        pubs: dict[str, str] = {}
+        missing: list[str] = []
+        for addr in addrs:
+            if is_cancelled():
+                raise _Cancelled
+            pub = keys.peer_pubkey(addr) if keys else None
+            if not pub and client is not None:
+                try:
+                    fetched = client.pubkey_get(addr)
+                except NetError:
+                    fetched = None
+                if fetched:
+                    if keys:
+                        keys.remember_peer(addr, fetched, source="lookup")
+                    pub = fetched
+            if pub:
+                pubs[addr] = pub
+            else:
+                missing.append(addr)
+        return pubs, missing
+
     def _send(self) -> None:
         to = self.e_to.text().strip()
         if not to:
             self.lbl_err.setText("alıcı gerekli")
             return
         attach = [Path(p.strip()) for p in self.e_attach.text().split(",") if p.strip()]
-        missing = [str(p) for p in attach if not p.is_file()]
-        if missing:
-            self.lbl_err.setText("dosya yok: " + ", ".join(missing))
+        missing_files = [str(p) for p in attach if not p.is_file()]
+        if missing_files:
+            self.lbl_err.setText("dosya yok: " + ", ".join(missing_files))
             return
         cc = self.e_cc.text()
         subject = self.e_subject.text().strip() or "(konu yok)"
         body = self.e_body.toPlainText()
         bcc = [x.strip() for x in self.e_bcc.text().split(",") if x.strip()]
         in_reply_to = self._in_reply_to
+        want_encrypt = self.chk_encrypt.isChecked()
+        sender_pub = self.backend.keys.public if self.backend.keys else None
+
+        msg = build_message(self.cfg, to=to, cc=cc, subject=subject, body=body,
+                            attachments=attach, in_reply_to=in_reply_to,
+                            sender_pubkey=sender_pub)
+        rcpts = recipients_of(msg, bcc)
+
+        encrypt_to: list[str] | None = None
+        if want_encrypt:
+            result: dict = {}
+
+            def resolve_work(is_cancelled):
+                result["pubs"], result["missing"] = self._resolve_pubkeys(rcpts, is_cancelled)
+
+            if not run_busy(self, "Alıcı anahtarları kontrol ediliyor", resolve_work,
+                            ok_text="Anahtarlar bulundu", err_text="Anahtar sorgusu başarısız"):
+                return  # iptal ya da hata — gönderim yapılmadı
+            missing = result.get("missing") or []
+            if missing:
+                yes = QMessageBox.question(
+                    self, "Şifreleme",
+                    "Şu alıcı(lar) için açık anahtar bulunamadı:\n" + "\n".join(missing) +
+                    "\n\nMesaj düz metin olarak gönderilsin mi?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No)
+                if yes != QMessageBox.StandardButton.Yes:
+                    return
+            else:
+                encrypt_to = list(result["pubs"].values())
 
         def work(is_cancelled):
-            msg = build_message(self.cfg, to=to, cc=cc, subject=subject, body=body,
-                                attachments=attach, in_reply_to=in_reply_to)
             if is_cancelled():
                 raise _Cancelled
-            self.backend.send(msg, bcc=bcc)
+            self.backend.send(msg, bcc=bcc, encrypt_to=encrypt_to)
 
-        if run_busy(self, "Mesaj gönderiliyor", work,
-                    ok_text="Mesaj gönderildi", err_text="Gönderim başarısız"):
+        busy_text = "Mesaj şifrelenip gönderiliyor" if encrypt_to else "Mesaj gönderiliyor"
+        ok_text = "Mesaj şifreli gönderildi" if encrypt_to else "Mesaj gönderildi"
+        if run_busy(self, busy_text, work, ok_text=ok_text, err_text="Gönderim başarısız"):
             self.sent.emit()
             self.close()
 
