@@ -22,6 +22,7 @@ _PARSER = BytesParser(policy=_epol.default)
 
 class Backend(abc.ABC):
     address: str = ""
+    keys = None  # ClientKeys | None — kişinin uçtan uca şifreleme kimliği
 
     @abc.abstractmethod
     def folders(self) -> list[str]: ...
@@ -85,9 +86,10 @@ class LocalBackend(Backend):
 
 
 class NetBackend(Backend):
-    def __init__(self, client: NetClient):
+    def __init__(self, client: NetClient, keys=None):
         self.client = client
         self.address = client.address
+        self.keys = keys  # ClientKeys | None — girişte açıldıysa dolu
 
     def folders(self) -> list[str]:
         return [f["name"] for f in self.client.folders()]

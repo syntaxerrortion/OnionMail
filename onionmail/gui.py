@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from . import crypto
 from .backend import Backend, LocalBackend, NetBackend
+from .clientkeys import ClientKeys
 from .compose import build_message
 from .config import Config
 from .netclient import AuthError, NetClient, NetError
@@ -438,6 +440,10 @@ def _client_json_path(cfg: Config) -> Path:
     return cfg.client.session_path_p.with_name("client.json")
 
 
+def _client_config_dir(cfg: Config) -> Path:
+    return cfg.client.session_path_p.parent
+
+
 def load_client_overrides(cfg: Config) -> None:
     """Overlay ~/.config/onionmail/client.json onto cfg (server address, SOCKS,
     sandbox backend). Set by the Settings dialog; keeps config.toml untouched."""
@@ -527,6 +533,10 @@ class LoginWindow(QWidget):
         self.cfg = cfg
         self._client: NetClient | None = None
         self._w: _Worker | None = None
+        self._keys: ClientKeys | None = None
+        self._identity_new = False
+        self._identity_error = ""
+        self._own_fingerprint = ""
         self.setWindowTitle("Messager — Sunucuya bağlan")
         self.resize(560, 420)
 
@@ -611,12 +621,43 @@ class LoginWindow(QWidget):
         reg = "açık" if pong.get("open_registration") else "davet kodlu"
         self.status.setText(f"bağlandı · sunucu {pong.get('onion','?')[:20]}… · kayıt: {reg}")
 
+    def _unlock_identity(self, address: str, password: str) -> None:
+        """Uçtan uca şifreleme kimliğini aç/oluştur ve gerekirse sunucuya
+        yayınla. Arka plan iş parçacığında çağrılır — sadece `self` üzerinde
+        veri tutar, UI'ye dokunmaz."""
+        self._keys = None
+        self._identity_new = False
+        self._identity_error = ""
+        self._own_fingerprint = ""
+        if not crypto.HAVE_AGE:
+            return
+        keys = ClientKeys(_client_config_dir(self.cfg))
+        try:
+            _secret, public, created = keys.unlock_or_create(address, password)
+        except crypto.CryptoError as e:
+            self._identity_error = str(e)
+            return
+        self._keys = keys
+        self._identity_new = created
+        self._own_fingerprint = crypto.fingerprint(public)
+        try:
+            if created or self._client.pubkey_get(address) != public:
+                self._client.pubkey_set(public)
+        except NetError:
+            pass  # yayınlanamadı — bir sonraki girişte tekrar denenir
+
     def _login(self) -> None:
         if not self._client:
             self.status.setText("önce bağlantıyı test et")
             return
         u, p = self.li_user.text().strip(), self.li_pass.text()
-        self._run(lambda: self._client.login(u, p), lambda _r: self._done())
+
+        def work():
+            r = self._client.login(u, p)
+            self._unlock_identity(r["address"], p)
+            return r
+
+        self._run(work, lambda _r: self._done())
 
     def _register(self) -> None:
         if not self._client:
@@ -640,6 +681,20 @@ class LoginWindow(QWidget):
             socks_host=self._client.socks_host, socks_port=self._client.socks_port,
         )
         save_session(self.cfg, self._client)
+        if self._identity_error:
+            QMessageBox.warning(
+                self, "Uçtan uca şifreleme",
+                "Yerel şifreleme anahtarın açılamadı: " + self._identity_error +
+                "\n\nBu oturumda şifreli mesaj okuma/gönderme kapalı olacak. "
+                "Hesap parolan değiştiyse tekrar giriş yapmayı dene.")
+        elif self._identity_new and self._keys:
+            QMessageBox.information(
+                self, "Şifreleme anahtarın oluşturuldu",
+                "Bu cihaz için yeni bir uçtan uca şifreleme anahtarı oluşturuldu "
+                "ve sunucuya açık kısmı yayınlandı.\n\nParmak izin:\n"
+                f"{self._own_fingerprint}\n\n"
+                "İstersen bu parmak izini karşı tarafla ayrı bir kanaldan "
+                "(telefon, yüz yüze) karşılaştırıp doğrulayabilirsin.")
         self.logged_in.emit(self._client)
         self.close()
 
@@ -1330,7 +1385,7 @@ def run(cfg: Config, local: bool = False) -> None:
     def open_login() -> None:
         login = LoginWindow(cfg)
         app._refs.append(login)
-        login.logged_in.connect(lambda c: open_main(NetBackend(c)))
+        login.logged_in.connect(lambda c: open_main(NetBackend(c, keys=login._keys)))
         login.show()
 
     def open_main(backend: Backend) -> None:
