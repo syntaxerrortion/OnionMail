@@ -30,7 +30,9 @@ from PySide6.QtWidgets import (
 from . import crypto
 from .backend import Backend, LocalBackend, NetBackend
 from .clientkeys import ClientKeys
-from .compose import build_message, recipients_of
+from .compose import (
+    PUBKEY_HEADER, build_message, decrypt_message, is_encrypted, recipients_of,
+)
 from .config import Config
 from .netclient import AuthError, NetClient, NetError
 from .sandbox import (
@@ -856,6 +858,7 @@ class MessagerWindow(QMainWindow):
         self._render_seq = 0                # en son istek sırası (eski cevapları ele)
         self._body_cache: dict = {}         # (folder, key, raw) -> render edilmiş metin
         self._auto_busy = False             # _auto_refresh list() zaten çalışıyor mu
+        self._warned_key_changes: set[str] = set()  # "adres:parmakizi" — bir kez uyar
 
         # Açılış boyutu: 155x44 karakterlik monospace ızgara (sonra serbestçe
         # küçültülüp büyütülebilir).
@@ -1036,18 +1039,57 @@ class MessagerWindow(QMainWindow):
         it = self.table.item(r, 0)
         return it.data(Qt.ItemDataRole.UserRole) if it else None
 
-    def _render_body(self, folder: str, key: str, raw: bool) -> tuple[str, list]:
+    def _harvest_pubkey(self, msg) -> tuple[str, str, str] | None:
+        """Gelen mesajın X-Onionmail-Pubkey başlığını TOFU dizinine al.
+        Anahtar değiştiyse (ve bu oturumda bunun için henüz uyarılmadıysak)
+        `(adres, eski_parmak_izi, yeni_parmak_izi)` döner — arayan bunu ana
+        iş parçacığında kullanıcıya göstermeli."""
+        keys = self.backend.keys
+        pub = (msg.get(PUBKEY_HEADER) or "").strip()
+        if not keys or not pub:
+            return None
+        addr = parseaddr(str(msg.get("From") or ""))[1].strip().lower()
+        if not addr:
+            return None
+        prev = keys.peer_info(addr)
+        if keys.remember_peer(addr, pub, source="message") != "changed":
+            return None
+        new_fp = crypto.fingerprint(pub)
+        tag = f"{addr}:{new_fp}"
+        if tag in self._warned_key_changes:
+            return None
+        self._warned_key_changes.add(tag)
+        return addr, (prev or {}).get("fingerprint", "?"), new_fp
+
+    def _render_body(self, folder: str, key: str, raw: bool):
         """Ağ çağrısı yapar — arka plan iş parçacığında çalıştırılmalı.
-        Döner: (gövde metni, [(index, dosya, boyut, tür, riskli), ...])."""
+        Döner: (gövde metni, [(index, dosya, boyut, tür, riskli), ...],
+        anahtar-değişti-uyarısı-ya-da-None)."""
         if raw:
-            return self.backend.get_bytes(folder, key).decode("utf-8", "replace"), []
+            return self.backend.get_bytes(folder, key).decode("utf-8", "replace"), [], None
         msg = self.backend.get(folder, key)
+        warn = self._harvest_pubkey(msg)
+        badge = ""
+        if is_encrypted(msg):
+            head = "\n".join(f"{h}: {msg[h]}" for h in ("From", "To", "Cc", "Date") if msg[h])
+            sep = "\n" + "-" * 48 + "\n"
+            own = self.backend.keys
+            if not (own and own.unlocked):
+                return ("🔒 Şifreli mesaj — bu oturumda anahtar açık değil "
+                        "(çözmek için çıkış yapıp tekrar giriş yap)." + sep + head), [], warn
+            try:
+                inner = decrypt_message(msg, own.secret)
+            except crypto.CryptoError as e:
+                return f"🔒 Şifreli mesaj — çözülemedi: {e}" + sep + head, [], warn
+            warn = warn or self._harvest_pubkey(inner)  # iç başlıkta da olabilir
+            msg = inner
+            badge = "🔒 Şifreli mesaj (çözüldü)\n"
         head = "\n".join(f"{h}: {msg[h]}"
                          for h in ("From", "To", "Cc", "Subject", "Date") if msg[h])
-        text = head + "\n" + "-" * 48 + "\n" + safe_text(msg)
+        text = badge + head + "\n" + "-" * 48 + "\n" + safe_text(msg)
         atts = [(p.index, p.filename, p.size, p.content_type, p.dangerous)
                 for p in list_parts(msg) if p.is_attachment]
-        return text, atts
+        return text, atts, warn
 
     @staticmethod
     def _hsize(n: int) -> str:
@@ -1132,10 +1174,19 @@ class MessagerWindow(QMainWindow):
         def done(result) -> None:
             if seq != self._render_seq:
                 return  # kullanıcı bu arada başka satıra geçti
-            text, atts = result
+            text, atts, warn = result
             if len(self._body_cache) > 200:
                 self._body_cache.clear()
             self._body_cache[ck] = (text, atts)
+            if warn:
+                addr, old_fp, new_fp = warn
+                QMessageBox.warning(
+                    self, "Anahtar değişti",
+                    f"{addr} adresinin uçtan uca şifreleme anahtarı değişti.\n\n"
+                    f"Eski parmak izi: {old_fp}\nYeni parmak izi: {new_fp}\n\n"
+                    "onionmail bu değişikliği otomatik kabul etmedi (eski anahtar "
+                    "kullanılmaya devam ediyor). Beklenmedik bir değişiklikse "
+                    "karşı tarafla ayrı bir kanaldan doğrula.")
             self.body.setPlainText(text)
             self._set_attachments(key, atts)
             if folder == "INBOX":
