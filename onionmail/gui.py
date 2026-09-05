@@ -68,6 +68,11 @@ QStatusBar::item {{ border:0; }}
 QSplitter::handle {{ background:#fff; height:2px; }}
 QPushButton {{ background:#000; color:#fff; border:1px solid #fff; padding:4px 14px; }}
 QPushButton:hover, QPushButton:default {{ background:{MIDNIGHT}; color:#fff; }}
+QCheckBox {{ spacing:6px; padding:4px 8px; border:1px solid #555; }}
+QCheckBox:disabled {{ color:#777; border:1px solid #333; }}
+QCheckBox::indicator {{ width:16px; height:16px; border:1px solid #fff; background:#000; }}
+QCheckBox::indicator:checked {{ background:#1e6fff; border:1px solid #1e6fff; }}
+QCheckBox::indicator:disabled {{ border:1px solid #555; background:#000; }}
 QScrollBar:vertical {{ background:#000; width:12px; border-left:1px solid #fff; }}
 QScrollBar:horizontal {{ background:#000; height:12px; border-top:1px solid #fff; }}
 QScrollBar::handle {{ background:#fff; min-height:20px; min-width:20px; }}
@@ -232,37 +237,21 @@ class ComposeWindow(QWidget):
                             sender_pubkey=sender_pub)
         rcpts = recipients_of(msg, bcc)
 
-        encrypt_to: list[str] | None = None
-        if want_encrypt:
-            result: dict = {}
-
-            def resolve_work(is_cancelled):
-                result["pubs"], result["missing"] = self._resolve_pubkeys(rcpts, is_cancelled)
-
-            if not run_busy(self, "Alıcı anahtarları kontrol ediliyor", resolve_work,
-                            ok_text="Anahtarlar bulundu", err_text="Anahtar sorgusu başarısız"):
-                return  # iptal ya da hata — gönderim yapılmadı
-            missing = result.get("missing") or []
-            if missing:
-                yes = QMessageBox.question(
-                    self, "Şifreleme",
-                    "Şu alıcı(lar) için açık anahtar bulunamadı:\n" + "\n".join(missing) +
-                    "\n\nMesaj düz metin olarak gönderilsin mi?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No)
-                if yes != QMessageBox.StandardButton.Yes:
-                    return
-            else:
-                encrypt_to = list(result["pubs"].values())
-
         def work(is_cancelled):
+            encrypt_to = None
+            if want_encrypt:
+                pubs, missing = self._resolve_pubkeys(rcpts, is_cancelled)
+                if missing:
+                    raise ValueError(
+                        "açık anahtar bulunamadı: " + ", ".join(missing) +
+                        " — 🔒 kutusunu kaldırıp düz gönderebilirsin")
+                encrypt_to = list(pubs.values())
             if is_cancelled():
                 raise _Cancelled
             self.backend.send(msg, bcc=bcc, encrypt_to=encrypt_to)
 
-        busy_text = "Mesaj şifrelenip gönderiliyor" if encrypt_to else "Mesaj gönderiliyor"
-        ok_text = "Mesaj şifreli gönderildi" if encrypt_to else "Mesaj gönderildi"
-        if run_busy(self, busy_text, work, ok_text=ok_text, err_text="Gönderim başarısız"):
+        if run_busy(self, "Mesaj gönderiliyor", work,
+                    ok_text="Mesaj gönderildi", err_text="Gönderim başarısız"):
             self.sent.emit()
             self.close()
 
