@@ -1280,7 +1280,8 @@ class MessagerWindow(QMainWindow):
         outgoing = self.folder in OUTGOING
         for r, s in enumerate(self._rows):
             name, addr = parseaddr((s.to if outgoing else s.from_) or "")
-            who = name or (addr.split("@")[0] if "@" in addr else addr) or "(?)"
+            nick = self.contacts.find_by_address(addr) if addr else None
+            who = nick or name or (addr.split("@")[0] if "@" in addr else addr) or "(?)"
             mark = "" if s.seen else "» "
             it0 = QTableWidgetItem(f"{mark}{who}")
             it0.setData(Qt.ItemDataRole.UserRole, s.key)

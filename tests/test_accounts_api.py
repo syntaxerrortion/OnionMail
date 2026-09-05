@@ -247,3 +247,36 @@ def test_smtpd_routes_to_account_maildir(tmp_path: Path):
 
     inbox = acc.store_for("neo").list("INBOX")
     assert len(inbox) == 1 and inbox[0].subject == "the matrix"
+
+
+# --------------------------------------------------------------------------- #
+#  NetBackend: giden mesajın From başlığı                                      #
+# --------------------------------------------------------------------------- #
+def test_netbackend_rewrites_from_to_account_address():
+    """İstemci config'i kendi kimliğini bilmez; ``build_message`` From'u
+    ``user@onionmail`` diye uydurur. ``NetBackend`` giriş yapılan hesabın
+    gerçek adresini yazmalı ki alıcı yanıtlayabilsin."""
+    from onionmail.backend import NetBackend
+    from onionmail.compose import build_message
+
+    captured: dict = {}
+
+    class _FakeClient:
+        address = f"nejarm@{ONION}"
+
+        def send(self, raw: bytes, rcpts: list[str]) -> int:
+            captured["raw"] = raw
+            captured["rcpts"] = rcpts
+            return 1
+
+    from onionmail.config import Identity
+
+    # kimliği tanımsız istemci config'i (hostname dosyası yok → From uydurulur)
+    cfg = Config(identity=Identity(hostname_file="/nonexistent/hostname"))
+    msg = build_message(cfg, to=[f"bob@{PEER}"], subject="selam", body="test")
+    assert str(msg["From"]) == "user@onionmail"
+
+    NetBackend(_FakeClient()).send(msg)
+
+    assert f"From: nejarm@{ONION}".encode() in captured["raw"]
+    assert captured["rcpts"] == [f"bob@{PEER}"]

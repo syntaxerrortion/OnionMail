@@ -116,6 +116,13 @@ class NetBackend(Backend):
         rcpts = recipients_of(msg, bcc)
         if "Bcc" in msg:
             del msg["Bcc"]
+        if self.address and "@" in self.address:
+            # istemci config'i kendi kimliğini bilmez; build_message From'u
+            # 'user@onionmail' diye uydurur. Giriş yapılan hesabın gerçek
+            # adresini koy ki alıcı yanıtlayabilsin (encrypt'ten önce: dış zarf
+            # From'u inner'dan kopyalanıyor).
+            del msg["From"]
+            msg["From"] = self.address
         if encrypt_to:
             msg = wrap_encrypted(msg, encrypt_to)  # istemcide sarılır — sunucu şifreleyemez
         return self.client.send(msg.as_bytes(), rcpts)
