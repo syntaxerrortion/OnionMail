@@ -237,15 +237,17 @@ class ComposeWindow(QWidget):
                             sender_pubkey=sender_pub)
         rcpts = recipients_of(msg, bcc)
 
-        def work(is_cancelled):
+        def work(is_cancelled, set_status):
             encrypt_to = None
             if want_encrypt:
+                set_status("Alıcı anahtarı aranıyor…")
                 pubs, missing = self._resolve_pubkeys(rcpts, is_cancelled)
                 if missing:
                     raise ValueError(
                         "açık anahtar bulunamadı: " + ", ".join(missing) +
                         " — 🔒 kutusunu kaldırıp düz gönderebilirsin")
                 encrypt_to = list(pubs.values())
+                set_status("Anahtar bulundu — mesaj gönderiliyor…")
             if is_cancelled():
                 raise _Cancelled
             self.backend.send(msg, bcc=bcc, encrypt_to=encrypt_to)
@@ -348,6 +350,7 @@ class CollectorDialog(QDialog):
 class _Worker(QThread):
     ok = Signal(object)
     fail = Signal(str)
+    status = Signal(str)   # run_busy: work() ilerleme metnini güncellemek için
 
     def __init__(self, fn):
         super().__init__()
@@ -454,8 +457,11 @@ class BusyDialog(QDialog):
 
 def run_busy(parent, busy_text: str, work, *,
              ok_text: str = "İşlem tamamlandı", err_text: str = "İşlem başarısız") -> bool:
-    """`work(is_cancelled)`'i arka planda çalıştırır, BusyDialog gösterir.
-    `work` tek argüman alır: iptal edildiyse True döndüren bir çağrılabilir.
+    """`work(is_cancelled, set_status)`'ı arka planda çalıştırır, BusyDialog
+    gösterir. `is_cancelled`: iptal edildiyse True döndüren çağrılabilir.
+    `set_status(text)`: diyaloğun üstündeki metni günceller (çok aşamalı
+    işlerde — ör. "anahtar aranıyor" → "gönderiliyor" — ayrı bir onay
+    penceresi açmadan tek diyalog içinde ilerleme göstermek için).
     Başarılıysa True, iptal/hata ise False döner."""
     dlg = BusyDialog(parent, busy_text)
     state = {"ok": False, "cancelled": False}
@@ -478,9 +484,10 @@ def run_busy(parent, busy_text: str, work, *,
         ev.set()
 
     dlg.on_cancel = _cancel
-    w = _Worker(lambda: work(ev.is_set))
+    w = _Worker(lambda: work(ev.is_set, w.status.emit))
     w.ok.connect(_done)
     w.fail.connect(_fail)
+    w.status.connect(dlg.note.setText)
     _LIVE_WORKERS.add(w)
     w.finished.connect(lambda: _LIVE_WORKERS.discard(w))
     dlg._worker_ref = w  # GC koruması
@@ -1222,7 +1229,7 @@ class MessagerWindow(QMainWindow):
         folder = self.folder
         tmp = Path(dest + ".part")
 
-        def work(is_cancelled):
+        def work(is_cancelled, _status):
             msg = self.backend.get(folder, key)
             if is_cancelled():
                 raise _Cancelled
@@ -1490,7 +1497,7 @@ class MessagerWindow(QMainWindow):
         result = {"n": 0, "err": False}
         finished = threading.Event()
 
-        def work(is_cancelled):
+        def work(is_cancelled, _status):
             try:
                 for k in keys:
                     if is_cancelled():
