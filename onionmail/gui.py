@@ -616,6 +616,38 @@ def client_from_session(d: dict) -> NetClient:
     return c
 
 
+def unlock_keys_prompt(cfg: Config, address: str, *, client: NetClient | None = None,
+                       parent=None) -> ClientKeys | None:
+    """Şifreleme anahtarını parolayla aç. Kaydedilmiş oturumla açılışta (oturum
+    token'ı parola-mühürlü anahtar deposunu açamaz) ya da sonradan Anahtarlar
+    penceresinden çağrılır. İptal / yanlış parola → None döner, o oturumda
+    şifreleme kapalı kalır."""
+    if not crypto.HAVE_AGE or not address:
+        return None
+    if not (_client_config_dir(cfg) / "keys.json").is_file():
+        return None
+    pw, ok = QInputDialog.getText(
+        parent, "Şifreleme anahtarı",
+        f"{address}\nAnahtar parolası (hesap parolan):",
+        QLineEdit.EchoMode.Password)
+    if not ok or not pw:
+        return None
+    keys = ClientKeys(_client_config_dir(cfg))
+    try:
+        _secret, public, created = keys.unlock_or_create(address, pw)
+    except crypto.CryptoError:
+        QMessageBox.warning(parent, "Şifreleme anahtarı",
+                            "Parola yanlış — bu oturumda şifreleme kapalı.")
+        return None
+    if client is not None:
+        try:
+            if created or client.pubkey_get(address) != public:
+                client.pubkey_set(public)
+        except NetError:
+            pass  # yayınlanamadı — sonra tekrar denenir
+    return keys
+
+
 # --------------------------------------------------------------------------- #
 #  Login / registration window (first run, or after logout / token expiry)     #
 # --------------------------------------------------------------------------- #
@@ -863,8 +895,10 @@ class SettingsDialog(QDialog):
 #  Keys dialog — own fingerprint + known-peer (TOFU) directory                 #
 # --------------------------------------------------------------------------- #
 class KeysDialog(QDialog):
-    def __init__(self, backend: Backend, parent=None):
+    def __init__(self, cfg: Config, backend: Backend, parent=None):
         super().__init__(parent)
+        self._cfg = cfg
+        self._backend = backend
         self.keys: ClientKeys | None = getattr(backend, "keys", None)
         self.setWindowTitle("Anahtarlar — uçtan uca şifreleme")
         self.resize(640, 460)
@@ -882,6 +916,10 @@ class KeysDialog(QDialog):
             v.addWidget(QLabel(
                 "Bu oturumda uçtan uca şifreleme kimliği açık değil "
                 "(pyrage kurulu değil ya da giriş sırasında anahtar açılamadı)."))
+            if crypto.HAVE_AGE and getattr(backend, "address", ""):
+                b_unlock = QPushButton("Anahtarı aç…")
+                b_unlock.clicked.connect(self._unlock_now)
+                v.addWidget(b_unlock)
 
         v.addWidget(QLabel("Bilinen eşler (TOFU):", objectName="fieldLabel"))
         self.table = QTableWidget(0, 4)
@@ -907,6 +945,21 @@ class KeysDialog(QDialog):
         b_close.clicked.connect(self.accept)
         row.addWidget(b_close)
         v.addLayout(row)
+
+    def _unlock_now(self) -> None:
+        keys = unlock_keys_prompt(
+            self._cfg, getattr(self._backend, "address", ""), parent=self,
+            client=getattr(self._backend, "client", None))
+        if keys is None:
+            return
+        self._backend.keys = keys
+        self.keys = keys
+        QMessageBox.information(
+            self, "Şifreleme anahtarı",
+            "Anahtar açıldı.\nParmak izin: "
+            f"{crypto.fingerprint(keys.public)}\n\n"
+            "Bundan sonra açtığın mesaj pencerelerinde 🔒 kutusu aktif olur.")
+        self.accept()
 
     def _reload_table(self) -> None:
         peers = self.keys.all_peers() if self.keys else {}
@@ -1761,7 +1814,7 @@ class MessagerWindow(QMainWindow):
         ContactsDialog(self.contacts, self).exec()
 
     def act_keys(self) -> None:
-        KeysDialog(self.backend, self).exec()
+        KeysDialog(self.cfg, self.backend, self).exec()
 
     def act_settings(self) -> None:
         dlg = SettingsDialog(self.cfg, self.backend, self)
@@ -1836,7 +1889,9 @@ def run(cfg: Config, local: bool = False) -> None:
 
     sess = load_session(cfg)
     if sess:
-        open_main(NetBackend(client_from_session(sess)))
+        client = client_from_session(sess)
+        keys = unlock_keys_prompt(cfg, sess.get("address", ""), client=client)
+        open_main(NetBackend(client, keys=keys))
     else:
         open_login()
     sys.exit(app.exec())
