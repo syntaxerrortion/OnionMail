@@ -55,7 +55,10 @@ QMenuBar::item {{ padding:3px 12px; background:#000; }}
 QMenuBar::item:selected {{ background:{MIDNIGHT}; color:#fff; }}
 QMenu {{ background:#000; color:#fff; border:1px solid #fff; }}
 QMenu::item:selected {{ background:{MIDNIGHT}; color:#fff; }}
-QLabel#titlebar, QLabel#modalTitle {{ background:{MIDNIGHT}; color:#fff; font-weight:bold; padding:3px 8px; border:1px solid #fff; }}
+QLabel#modalTitle {{ background:{MIDNIGHT}; color:#fff; font-weight:bold; padding:3px 8px; border:1px solid #fff; }}
+QWidget#titlebar {{ background:{MIDNIGHT}; border:1px solid #fff; }}
+QWidget#titlebar QLabel#titlebarText {{ background:transparent; color:#fff; font-weight:bold; border:0; padding:3px 4px; }}
+QWidget#titlebar QLineEdit {{ padding:1px 4px; }}
 QLabel#fieldLabel {{ font-weight:bold; }}
 QLabel#fromLine {{ font-weight:bold; padding:4px 0; }}
 QHeaderView::section {{ background:{MIDNIGHT}; color:#fff; font-weight:bold; border:0; border-right:1px solid #3a3a5a; border-bottom:1px solid #fff; padding:3px 8px; }}
@@ -1188,6 +1191,8 @@ class MessagerWindow(QMainWindow):
         self._body_cache: dict = {}         # (folder, key, raw) -> render edilmiş metin
         self._auto_busy = False             # _auto_refresh list() zaten çalışıyor mu
         self._warned_key_changes: set[str] = set()  # "adres:parmakizi" — bir kez uyar
+        self._filter = ""                   # mesaj listesi arama sorgusu (küçük harf)
+        self._qtxt = "?"                    # son bilinen kuyruk sayısı (filtre için önbellek)
 
         # Açılış boyutu: 155x44 karakterlik monospace ızgara (sonra serbestçe
         # küçültülüp büyütülebilir).
@@ -1200,7 +1205,7 @@ class MessagerWindow(QMainWindow):
         self._build_menu()
 
         self.titlebar = QLabel("")
-        self.titlebar.setObjectName("titlebar")
+        self.titlebar.setObjectName("titlebarText")
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Messages", "Subject"])
@@ -1216,6 +1221,22 @@ class MessagerWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 240)
+
+        # --- arama kutusu: başlık hizasında, sağ üstte küçük bir kutu ---
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("ara…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(260)
+        self.search.setToolTip("Kimden · kime · konu içinde ara  (Ctrl+F odak, Esc temizle)")
+        self._search_debounce = QTimer(self)
+        self._search_debounce.setSingleShot(True)
+        self._search_debounce.setInterval(150)
+        self._search_debounce.timeout.connect(self._apply_filter)
+        self.search.textChanged.connect(lambda *_: self._search_debounce.start())
+        _esc = QShortcut(QKeySequence("Esc"), self.search)
+        _esc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        _esc.activated.connect(self._clear_filter)
+
         self._render_debounce = QTimer(self)
         self._render_debounce.setSingleShot(True)
         self._render_debounce.setInterval(120)
@@ -1244,11 +1265,21 @@ class MessagerWindow(QMainWindow):
         split.addWidget(body_box)
         split.setSizes([300, 360])
 
+        # üst çubuk: "Messager - KLASÖR" solda, arama kutusu sağda (ayrı satır yok)
+        tb_row = QWidget()
+        tb_row.setObjectName("titlebar")
+        tbh = QHBoxLayout(tb_row)
+        tbh.setContentsMargins(8, 2, 6, 2)
+        tbh.setSpacing(6)
+        tbh.addWidget(self.titlebar)
+        tbh.addStretch(1)
+        tbh.addWidget(self.search)
+
         central = QWidget()
         v = QVBoxLayout(central)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
-        v.addWidget(self.titlebar)
+        v.addWidget(tb_row)
         v.addWidget(split, 1)
         self.setCentralWidget(central)
 
@@ -1283,6 +1314,7 @@ class MessagerWindow(QMainWindow):
             ("Delete", self.act_delete), ("A", self.act_collector),
             ("X", self.act_toggle_raw), ("F", self.act_flush), ("G", self.reload),
             ("Ctrl+A", self.table.selectAll), ("Ctrl+Shift+A", self.table.clearSelection),
+            ("Ctrl+F", self.search.setFocus),
             ("Ctrl+Tab", self.act_next_folder), ("?", self.act_help),
             ("Ctrl+Q", self.close),
         ):
@@ -1329,9 +1361,34 @@ class MessagerWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001
             self.status.showMessage(f"liste alınamadı: {e}")
             return
-        self.table.setRowCount(len(self._rows))
+        self.titlebar.setText(f"Messager - {self.folder}")
+        self.setWindowTitle(f"Messager - {self.folder}")
+        qc = self.backend.queue_count()
+        self._qtxt = "server" if qc < 0 else str(qc)
+        self._populate_table(select=select, prev_key=prev_key)
+        if self.folder == "INBOX":
+            self._inbox_keys = {s.key for s in self._rows}
+            self._inbox_seeded = True
+
+    def _row_matches(self, s, outgoing: bool) -> bool:
+        """Arama sorgusu kimden/kime/konu (ve kayıtlı takma ad) içinde geçiyor mu."""
+        q = self._filter
+        if not q:
+            return True
+        hay = " ".join(x for x in (s.from_, s.to, s.subject) if x)
+        addr = parseaddr((s.to if outgoing else s.from_) or "")[1]
+        nick = self.contacts.find_by_address(addr) if addr else None
+        if nick:
+            hay += " " + nick
+        return q in hay.lower()
+
+    def _populate_table(self, *, select: bool, prev_key: str | None) -> None:
+        """`self._rows`'u (arama filtresi uygulanmış olarak) tabloya bas.
+        `reload()` ve arama kutusu buradan geçer."""
         outgoing = self.folder in OUTGOING
-        for r, s in enumerate(self._rows):
+        rows = [s for s in self._rows if self._row_matches(s, outgoing)]
+        self.table.setRowCount(len(rows))
+        for r, s in enumerate(rows):
             name, addr = parseaddr((s.to if outgoing else s.from_) or "")
             nick = self.contacts.find_by_address(addr) if addr else None
             who = nick or name or (addr.split("@")[0] if "@" in addr else addr) or "(?)"
@@ -1340,16 +1397,13 @@ class MessagerWindow(QMainWindow):
             it0.setData(Qt.ItemDataRole.UserRole, s.key)
             self.table.setItem(r, 0, it0)
             self.table.setItem(r, 1, QTableWidgetItem(s.subject or "(konu yok)"))
-        self.titlebar.setText(f"Messager - {self.folder}")
-        self.setWindowTitle(f"Messager - {self.folder}")
-        qc = self.backend.queue_count()
-        qtxt = "server" if qc < 0 else str(qc)
         who = self.backend.address or "(yerel)"
+        cnt = f"{len(rows)}/{len(self._rows)}" if self._filter else str(len(self._rows))
         self.status.showMessage(
-            f"{who[:30]}   msgs:{len(self._rows)}   queue:{qtxt}   "
-            f"[{self.folder}]   N:new  R:reply  Ctrl+A:seç  D:sil  A:collector  ?:help"
+            f"{who[:30]}   msgs:{cnt}   queue:{self._qtxt}   "
+            f"[{self.folder}]   N:new  R:reply  Ctrl+F:ara  D:sil  A:collector  ?:help"
         )
-        if not self._rows:
+        if not rows:
             self.body.setPlainText("")
             self._set_attachments(None, [])
         elif select:
@@ -1360,9 +1414,19 @@ class MessagerWindow(QMainWindow):
                 if it and it.data(Qt.ItemDataRole.UserRole) == prev_key:
                     self.table.selectRow(r)
                     break
-        if self.folder == "INBOX":
-            self._inbox_keys = {s.key for s in self._rows}
-            self._inbox_seeded = True
+
+    def _apply_filter(self) -> None:
+        new = self.search.text().strip().lower()
+        if new == self._filter:
+            return
+        self._filter = new
+        self._populate_table(select=False, prev_key=self._selected_key())
+
+    def _clear_filter(self) -> None:
+        self.search.clear()
+        self._filter = ""
+        self._populate_table(select=False, prev_key=self._selected_key())
+        self.table.setFocus()
 
     def _selected_key(self) -> str | None:
         r = self.table.currentRow()
@@ -1667,6 +1731,9 @@ class MessagerWindow(QMainWindow):
     def _goto(self, ix: int) -> None:
         self.folder_ix = ix % len(FOLDERS)
         self._raw = False
+        if self._filter:
+            self.search.clear()
+            self._filter = ""
         self.reload()
 
     def act_next_folder(self) -> None:
@@ -1831,6 +1898,7 @@ class MessagerWindow(QMainWindow):
             "N  yeni mesaj      R  yanıtla       D  sil\n"
             "A  collector (sandbox)              X  ham kaynak\n"
             "Ctrl+Tab  sonraki klasör           G  yenile\n"
+            "Ctrl+F  aramaya odaklan (kimden/kime/konu)  Esc  aramayı temizle\n"
             "F  gideni şimdi gönder (yerel mod)  ?  bu ekran   Ctrl+Q  çık\n\n"
             "Menü: Email = yeni mesaj · Settings = sunucu/hesap · Help = bu ekran"
         ))
