@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from . import crypto
 from .backend import Backend, LocalBackend, NetBackend
 from .clientkeys import ClientKeys
+from .contacts import Contacts, ContactError
 from .compose import (
     PUBKEY_HEADER, build_message, decrypt_message, is_encrypted, recipients_of,
 )
@@ -94,9 +95,11 @@ class ComposeWindow(QWidget):
     sent = Signal()
 
     def __init__(self, cfg: Config, backend: Backend, *, to="", cc="", bcc="",
-                 subject="", body="", in_reply_to: str | None = None):
+                 subject="", body="", in_reply_to: str | None = None,
+                 contacts: Contacts | None = None):
         super().__init__()
         self.cfg, self.backend, self._in_reply_to = cfg, backend, in_reply_to
+        self.contacts = contacts
         from_addr = backend.address or (cfg.identity.resolve_onion() or "onionmail")
 
         self.setWindowTitle("New Message")
@@ -122,7 +125,7 @@ class ComposeWindow(QWidget):
         self.e_cc = QLineEdit(cc)
         self.e_to = QLineEdit(to)
         self.e_bcc = QLineEdit(bcc)
-        self.e_to.setPlaceholderText("alıcı@<56 karakter>.onion")
+        self.e_to.setPlaceholderText("alıcı@<56 karakter>.onion ya da takma ad")
         self.e_cc.setPlaceholderText("ad@<onion>, ...")
         self.e_bcc.setPlaceholderText("gizli@<onion>, ...")
         for col, text in ((0, "Subject:"), (1, "CC:")):
@@ -133,7 +136,15 @@ class ComposeWindow(QWidget):
         for col, text in ((0, "To:"), (1, "BCC:")):
             lb = QLabel(text); lb.setObjectName("fieldLabel")
             grid.addWidget(lb, 2, col)
-        grid.addWidget(self.e_to, 3, 0)
+        to_row = QWidget()
+        to_lay = QHBoxLayout(to_row)
+        to_lay.setContentsMargins(0, 0, 0, 0)
+        to_lay.addWidget(self.e_to, 1)
+        b_contacts = QPushButton("Kişiler")
+        b_contacts.setEnabled(self.contacts is not None)
+        b_contacts.clicked.connect(self._pick_contact)
+        to_lay.addWidget(b_contacts)
+        grid.addWidget(to_row, 3, 0)
         grid.addWidget(self.e_bcc, 3, 1)
         grid.setColumnStretch(0, 3)
         grid.setColumnStretch(1, 2)
@@ -186,6 +197,17 @@ class ComposeWindow(QWidget):
             cur = [p for p in self.e_attach.text().split(",") if p.strip()]
             self.e_attach.setText(", ".join(cur + paths))
 
+    def _pick_contact(self) -> None:
+        if not self.contacts:
+            return
+        nick = ContactPickerDialog.pick(self.contacts, self)
+        if not nick:
+            return
+        cur = [p.strip() for p in self.e_to.text().split(",") if p.strip()]
+        if nick not in cur:
+            cur.append(nick)
+        self.e_to.setText(", ".join(cur))
+
     def _resolve_pubkeys(self, addrs: list[str], is_cancelled) -> tuple[dict[str, str], list[str]]:
         """Her alıcı için age açık anahtarını bul: önce TOFU önbelleği, yoksa
         (uzak backend ise) sunucudan sor + önbelleğe al. Zaten bilinen bir
@@ -214,8 +236,16 @@ class ComposeWindow(QWidget):
                 missing.append(addr)
         return pubs, missing
 
+    def _resolve_addrs(self, text: str) -> list[str]:
+        """Virgülle ayrılmış alanı çöz: bilinen takma adları (kişi defteri)
+        onion adresine çevirir, bilinmeyenleri olduğu gibi bırakır."""
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        if not self.contacts:
+            return parts
+        return [self.contacts.resolve(p) for p in parts]
+
     def _send(self) -> None:
-        to = self.e_to.text().strip()
+        to = self._resolve_addrs(self.e_to.text())
         if not to:
             self.lbl_err.setText("alıcı gerekli")
             return
@@ -224,10 +254,10 @@ class ComposeWindow(QWidget):
         if missing_files:
             self.lbl_err.setText("dosya yok: " + ", ".join(missing_files))
             return
-        cc = self.e_cc.text()
+        cc = self._resolve_addrs(self.e_cc.text())
         subject = self.e_subject.text().strip() or "(konu yok)"
         body = self.e_body.toPlainText()
-        bcc = [x.strip() for x in self.e_bcc.text().split(",") if x.strip()]
+        bcc = self._resolve_addrs(self.e_bcc.text())
         in_reply_to = self._in_reply_to
         want_encrypt = self.chk_encrypt.isChecked()
         sender_pub = self.backend.keys.public if self.backend.keys else None
@@ -936,6 +966,149 @@ class KeysDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
+#  Contacts — takma ad → onion adresi                                          #
+# --------------------------------------------------------------------------- #
+class ContactPickerDialog(QDialog):
+    """Compose penceresindeki 'Kişiler' düğmesi için: aranabilir, çift
+    tıklamayla seçilebilir küçük kişi listesi."""
+
+    def __init__(self, contacts: Contacts, parent=None):
+        super().__init__(parent)
+        self.contacts = contacts
+        self.chosen: str | None = None
+        self.setWindowTitle("Kişi seç")
+        self.resize(440, 380)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(QLabel("Kişi seç", objectName="modalTitle"))
+        box = QWidget(); lay.addWidget(box, 1)
+        v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
+
+        self.e_search = QLineEdit()
+        self.e_search.setPlaceholderText("ara…")
+        self.e_search.textChanged.connect(self._reload)
+        v.addWidget(self.e_search)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Takma ad", "Adres"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.doubleClicked.connect(self._accept_selected)
+        v.addWidget(self.table, 1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        b_ok = QPushButton("Seç"); b_ok.clicked.connect(self._accept_selected)
+        b_cancel = QPushButton("İptal"); b_cancel.clicked.connect(self.reject)
+        row.addWidget(b_ok); row.addWidget(b_cancel)
+        v.addLayout(row)
+
+        self._reload("")
+        self.e_search.setFocus()
+
+    def _reload(self, query: str) -> None:
+        q = query.strip().lower()
+        rows = sorted(
+            (r["nick"], r["address"]) for r in self.contacts.all().values()
+            if not q or q in r["nick"].lower() or q in r["address"].lower())
+        self.table.setRowCount(len(rows))
+        for r, (nick, addr) in enumerate(rows):
+            self.table.setItem(r, 0, QTableWidgetItem(nick))
+            self.table.setItem(r, 1, QTableWidgetItem(addr))
+        self.table.resizeColumnsToContents()
+
+    def _accept_selected(self) -> None:
+        r = self.table.currentRow()
+        if r < 0:
+            return
+        it = self.table.item(r, 0)
+        self.chosen = it.text() if it else None
+        self.accept()
+
+    @staticmethod
+    def pick(contacts: Contacts, parent=None) -> str | None:
+        dlg = ContactPickerDialog(contacts, parent)
+        return dlg.chosen if dlg.exec() == QDialog.DialogCode.Accepted else None
+
+
+class ContactsDialog(QDialog):
+    """Menüdeki Contacts girişi: kişi defterini yönet (ekle/güncelle/sil)."""
+
+    def __init__(self, contacts: Contacts, parent=None):
+        super().__init__(parent)
+        self.contacts = contacts
+        self.setWindowTitle("Kişiler")
+        self.resize(640, 440)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(QLabel("Kişiler", objectName="modalTitle"))
+        box = QWidget(); lay.addWidget(box, 1)
+        v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Takma ad", "Adres", "Not"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        v.addWidget(self.table, 1)
+        self._reload()
+
+        row = QHBoxLayout()
+        b_add = QPushButton("Ekle / güncelle"); b_add.clicked.connect(self._add)
+        b_del = QPushButton("Sil"); b_del.clicked.connect(self._remove)
+        row.addWidget(b_add); row.addWidget(b_del)
+        row.addStretch(1)
+        b_close = QPushButton("Kapat"); b_close.clicked.connect(self.accept)
+        row.addWidget(b_close)
+        v.addLayout(row)
+
+    def _reload(self) -> None:
+        recs = sorted(self.contacts.all().values(), key=lambda r: r["nick"].lower())
+        self.table.setRowCount(len(recs))
+        for r, rec in enumerate(recs):
+            for c, val in enumerate((rec["nick"], rec["address"], rec.get("note", ""))):
+                self.table.setItem(r, c, QTableWidgetItem(val))
+        self.table.resizeColumnsToContents()
+
+    def _sel_nick(self) -> str | None:
+        r = self.table.currentRow()
+        if r < 0:
+            return None
+        it = self.table.item(r, 0)
+        return it.text() if it else None
+
+    def _add(self) -> None:
+        nick, ok = QInputDialog.getText(self, "Kişi ekle", "Takma ad:")
+        if not ok or not nick.strip():
+            return
+        addr, ok = QInputDialog.getText(self, "Kişi ekle", "Adres (kisi@<56 karakter>.onion):")
+        if not ok or not addr.strip():
+            return
+        note, ok = QInputDialog.getText(self, "Kişi ekle", "Not (opsiyonel):")
+        try:
+            self.contacts.add(nick, addr, note if ok else "")
+        except ContactError as e:
+            QMessageBox.warning(self, "Geçersiz kişi", str(e))
+            return
+        self._reload()
+
+    def _remove(self) -> None:
+        nick = self._sel_nick()
+        if not nick:
+            return
+        yes = QMessageBox.question(
+            self, "Sil", f"{nick} silinsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if yes == QMessageBox.StandardButton.Yes:
+            self.contacts.remove(nick)
+            self._reload()
+
+
+# --------------------------------------------------------------------------- #
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class MessagerWindow(QMainWindow):
@@ -945,6 +1118,7 @@ class MessagerWindow(QMainWindow):
         super().__init__()
         self.cfg = cfg
         self.backend = backend
+        self.contacts = Contacts(_client_config_dir(cfg))
         self.folder_ix = 0
         self._raw = False
         self._auth_dead = False
@@ -1041,6 +1215,7 @@ class MessagerWindow(QMainWindow):
         mb.setNativeMenuBar(False)
         for label, slot in (
             ("Email", self.act_compose),
+            ("Contacts", self.act_contacts),
             ("Keys", self.act_keys),
             ("Settings", self.act_settings),
             ("Help", self.act_help),
@@ -1454,7 +1629,7 @@ class MessagerWindow(QMainWindow):
         w.show()
 
     def act_compose(self) -> None:
-        self._spawn(ComposeWindow(self.cfg, self.backend))
+        self._spawn(ComposeWindow(self.cfg, self.backend, contacts=self.contacts))
 
     def act_reply(self) -> None:
         key = self._selected_key()
@@ -1468,6 +1643,7 @@ class MessagerWindow(QMainWindow):
             subject="Re: " + str(msg["Subject"] or ""),
             body="\n\n" + quoted,
             in_reply_to=str(msg["Message-ID"] or "") or None,
+            contacts=self.contacts,
         ))
 
     def _selected_keys(self) -> list[str]:
@@ -1541,6 +1717,9 @@ class MessagerWindow(QMainWindow):
         a_all = m.addAction("Tümünü seç")
         a_clear = m.addAction("Seçimi temizle")
         m.addSeparator()
+        a_contact = m.addAction("Göndereni kişiye ekle")
+        a_contact.setEnabled(sel == 1)
+        m.addSeparator()
         a_del = m.addAction(f"Seçileni sil ({sel})" if sel else "Seçileni sil")
         a_del.setEnabled(sel > 0)
         chosen = m.exec(self.table.viewport().mapToGlobal(pos))
@@ -1548,13 +1727,37 @@ class MessagerWindow(QMainWindow):
             self.table.selectAll()
         elif chosen == a_clear:
             self.table.clearSelection()
+        elif chosen == a_contact:
+            self._add_sender_as_contact()
         elif chosen == a_del:
             self.act_delete()
+
+    def _add_sender_as_contact(self) -> None:
+        key = self._selected_key()
+        if not key:
+            return
+        msg = self.backend.get(self.folder, key)
+        addr = parseaddr(str(msg.get("From") or ""))[1].strip().lower()
+        if not addr:
+            QMessageBox.warning(self, "Kişi ekle", "Gönderen adresi okunamadı.")
+            return
+        existing = self.contacts.find_by_address(addr)
+        nick, ok = QInputDialog.getText(
+            self, "Kişiye ekle", f"{addr}\n\nTakma ad:", text=existing or "")
+        if not ok or not nick.strip():
+            return
+        try:
+            self.contacts.add(nick, addr)
+        except ContactError as e:
+            QMessageBox.warning(self, "Geçersiz kişi", str(e))
 
     def act_collector(self) -> None:
         key = self._selected_key()
         if key:
             CollectorDialog(self.cfg, self.backend, self.folder, key, self).exec()
+
+    def act_contacts(self) -> None:
+        ContactsDialog(self.contacts, self).exec()
 
     def act_keys(self) -> None:
         KeysDialog(self.backend, self).exec()
