@@ -68,6 +68,23 @@ def test_inbound_delivery(cfg: Config):
     assert "onion-SMTP" in store.get_bytes("INBOX", inbox[0].key).decode()
 
 
+def test_list_decodes_non_ascii_subject(cfg: Config):
+    """`mailbox.Maildir` mesajları compat32 policy'siyle ayrıştırıyor —
+    `store.list()` RFC 2047 encoded-word (ör. Türkçe karakterli Subject)
+    başlıklarını kendisi çözmeli, ham '=?utf-8?...?=' göstermemeli."""
+    store = Store(cfg.storage.maildir_path)
+    msg = EmailMessage()
+    msg["From"] = f"someone@{PEER}"
+    msg["To"] = f"me@{ONION}"
+    msg["Subject"] = "[şifreli mesaj]"
+    msg.set_content("gövde")
+    store.add_incoming(msg.as_bytes())
+
+    inbox = store.list("INBOX")
+    assert len(inbox) == 1
+    assert inbox[0].subject == "[şifreli mesaj]"
+
+
 def test_relay_is_refused(cfg: Config):
     from onionmail.smtpd import build_controller
 

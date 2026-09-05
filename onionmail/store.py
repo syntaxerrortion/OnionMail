@@ -7,6 +7,7 @@ import mailbox
 import time
 from dataclasses import dataclass, asdict
 from email import policy
+from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
@@ -14,6 +15,19 @@ from pathlib import Path
 
 FOLDERS = ("INBOX", "Sent", "Outbox", "Failed", "Drafts")
 _PARSER = BytesParser(policy=policy.default)
+
+
+def _decoded_header(msg, name: str, default: str = "") -> str:
+    """`mailbox.Maildir` mesajları eski (compat32) policy ile ayrıştırılıyor —
+    `msg.get(...)` RFC 2047 encoded-word'leri (ör. Türkçe karakterli Subject)
+    çözmeden ham döndürüyor. `decode_header` bundan bağımsız çalışır."""
+    raw = msg.get(name)
+    if raw is None:
+        return default
+    try:
+        return str(make_header(decode_header(str(raw))))
+    except (UnicodeDecodeError, LookupError, ValueError):
+        return str(raw)
 
 
 @dataclass(slots=True)
@@ -80,10 +94,10 @@ class Store:
                     Summary(
                         folder=name,
                         key=key,
-                        from_=str(msg.get("From", "")),
-                        to=str(msg.get("To", "")),
-                        subject=str(msg.get("Subject", "(konu yok)")),
-                        date=str(msg.get("Date", "")),
+                        from_=_decoded_header(msg, "From"),
+                        to=_decoded_header(msg, "To"),
+                        subject=_decoded_header(msg, "Subject", "(konu yok)"),
+                        date=_decoded_header(msg, "Date"),
                         seen="S" in msg.get_flags(),
                         size=len(msg.as_bytes()),
                     )
