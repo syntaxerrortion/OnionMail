@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/onionmail-logo.svg" alt="onionmail" width="440">
+</p>
+
 # onionmail
 
 A personal, **onion-to-onion** SMTP mail system that runs behind a Tor onion

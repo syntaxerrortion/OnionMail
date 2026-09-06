@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="onionmail">
+  <title>onionmail</title>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="#000000" stroke="#ffffff" stroke-width="3"/>
+
+  <!-- stem + leaf -->
+  <path d="M128 60 C128 44 124 34 116 26" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <path d="M129 44 C138 34 152 31 163 34 C156 46 142 50 129 44 Z" fill="#ffffff"/>
+
+  <!-- onion body -->
+  <path d="M128 58 C92 92 74 124 74 159 C74 199 98 223 128 223 C158 223 182 199 182 159 C182 124 164 92 128 58 Z"
+        fill="none" stroke="#ffffff" stroke-width="12" stroke-linejoin="round"/>
+  <!-- inner crown layer -->
+  <path d="M94 132 C94 96 110 76 128 76 C146 76 162 96 162 132"
+        fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+
+  <!-- envelope at the onion's heart : the single accent -->
+  <g fill="none" stroke="#1e6fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M92 154 L92 186 L164 186 L164 154"/>
+    <path d="M92 154 L128 180 L164 154"/>
+  </g>
+</svg>

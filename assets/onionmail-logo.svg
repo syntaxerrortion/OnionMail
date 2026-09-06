@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img" aria-label="onionmail">
+  <title>onionmail</title>
+  <rect x="4" y="4" width="712" height="212" rx="36" fill="#000000" stroke="#ffffff" stroke-width="3"/>
+
+  <!-- mark -->
+  <g transform="translate(34 20) scale(0.72)">
+    <path d="M128 60 C128 44 124 34 116 26" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+    <path d="M129 44 C138 34 152 31 163 34 C156 46 142 50 129 44 Z" fill="#ffffff"/>
+    <path d="M128 58 C92 92 74 124 74 159 C74 199 98 223 128 223 C158 223 182 199 182 159 C182 124 164 92 128 58 Z"
+          fill="none" stroke="#ffffff" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M94 132 C94 96 110 76 128 76 C146 76 162 96 162 132"
+          fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+    <g fill="none" stroke="#1e6fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M92 154 L92 186 L164 186 L164 154"/>
+      <path d="M92 154 L128 180 L164 154"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="212" y="142" font-family="'DejaVu Sans Mono','Menlo','Consolas','Courier New',monospace" font-size="84" letter-spacing="1">
+    <tspan fill="#ffffff">onion</tspan><tspan fill="#1e6fff">mail</tspan>
+  </text>
+  <rect x="214" y="162" width="452" height="6" rx="3" fill="#1e6fff"/>
+</svg>
