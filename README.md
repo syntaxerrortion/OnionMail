@@ -13,6 +13,11 @@ here works by "connect to the `.onion` in the address on port 25".
 > anything that offers an onion MX). It will not send to `gmail.com`. See
 > `docs/threat-model.md`.
 
+
+<p align="center">
+  <img src="assets/screenshot.png" alt="Messager — inbox list and a message window with attachments" width="900">
+</p>
+
 ## Components
 
 | Module | Job |
