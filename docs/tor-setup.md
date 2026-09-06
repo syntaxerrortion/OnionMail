@@ -1,6 +1,6 @@
-# dm1 (Debian 13) üzerinde Tor + onionmail kurulumu
+# Sunucu (Debian 13) üzerinde Tor + onionmail kurulumu
 
-Bu adımlar **dm1 sunucusunda** yapılır. Geliştirme makinene hiçbir şey kurulmaz.
+Bu adımlar **sunucu bilgisayarda** yapılır. Geliştirme makinene hiçbir şey kurulmaz.
 
 ## 1. Tor
 
@@ -153,6 +153,6 @@ Birkaç saniye–dakika sonra INBOX'ta görünmeli (onion devresi kurulması zam
 ## Ağ notları
 
 * Router'da **port yönlendirmeye gerek yok** — onion service giden bağlantıyla
-  çalışır, dm1'in dışarıdan erişilebilir olması gerekmez.
+  çalışır, sunucunun dışarıdan erişilebilir olması gerekmez.
 * Dinamik ev IP'si sorun değil; onion adresi sabit kalır.
 * Sunucuyu kapatırsan adres erişilemez olur; açınca geri gelir.

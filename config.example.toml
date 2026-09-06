@@ -37,7 +37,7 @@ allowed_sender_onions = []
 # ------------------------------------------------------------------------
 [accounts]
 enabled = false                                   # true: her kullanıcı ayrı hesap
-store_path = "~/.local/share/onionmail/accounts"  # dm1'de: /var/lib/onionmail/accounts
+store_path = "~/.local/share/onionmail/accounts"  # sunucuda: /var/lib/onionmail/accounts
 open_registration = false                         # false: kayıt davet kodu ister
 session_ttl = 3600                                # oturum token'ı ömrü (sn)
 max_failed = 5                                    # bu kadar hatalı girişten sonra kilit

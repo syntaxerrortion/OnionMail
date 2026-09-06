@@ -258,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("gui", help="native masaüstü penceresini aç (PySide6)")
     sp.add_argument("--local", action="store_true",
-                    help="uzak sunucuya bağlanma; yerel Maildir kullan (dm1'de)")
+                    help="uzak sunucuya bağlanma; yerel Maildir kullan (sunucuda)")
     sp.set_defaults(func=cmd_gui)
 
     sp = sub.add_parser("apid", help="hesap/mail API servisini çalıştır (2. onion portu)")

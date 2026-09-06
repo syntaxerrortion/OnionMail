@@ -1,7 +1,7 @@
 """A single mail-store interface with two implementations, so the GUI and TUI
 don't care whether the mailbox is a local Maildir or a remote `apid` over Tor.
 
-* ``LocalBackend``  — direct Maildir access (run the client on the dm1 / over SSH)
+* ``LocalBackend``  — direct Maildir access (run the client on the server / over SSH)
 * ``NetBackend``    — talk to the server's `apid` onion, authenticated
 """
 

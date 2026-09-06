@@ -2,7 +2,7 @@
 
 ## Ne sağlar
 
-* **Sunucu konumu gizli.** Onion service, dm1'in IP'sini/coğrafi konumunu
+* **Sunucu konumu gizli.** Onion service, sunucunun IP'sini/coğrafi konumunu
   açığa çıkarmaz. Router port yönlendirmesi gerekmez.
 * **Taşımada şifreleme.** Onion-to-onion trafiği Tor tarafından uçtan uca
   şifrelenir; STARTTLS olmadan da SMTP konuşması ağda düz görünmez.
@@ -18,7 +18,7 @@
   `onionmail/pgp.py`). Şimdilik istemci tarafında elle yapılabilir.
 * **Metadata alıcıda görünür.** Karşı sunucu: gönderen adresi, zaman, boyut,
   Subject başlığını görür. Subject'i de korumak istiyorsan PGP/MIME gerekir.
-* **Uç nokta güvenliği.** dm1 ele geçirilirse tüm posta ve onion özel anahtarı
+* **Uç nokta güvenliği.** Sunucu ele geçirilirse tüm posta ve onion özel anahtarı
   (`/var/lib/tor/onionmail/`) açığa çıkar. Bu anahtar = adresin; yedekle ve
   erişimini kısıtla (`chmod 700`, ayrı kullanıcı).
 * **Clearnet yok.** `gmail.com` vb. adreslere gönderemezsin. Yazışacağın
