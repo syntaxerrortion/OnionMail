@@ -1165,6 +1165,258 @@ class ContactsDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
+#  Message view — her mesaj kendi penceresinde (ana listede önizleme yok)      #
+# --------------------------------------------------------------------------- #
+class MessageWindow(QWidget):
+    """Tek bir mesajı kendi penceresinde gösterir (Who Am I mockup'ındaki gibi
+    ayrı pencere; ana liste artık alt panelde önizleme yapmıyor)."""
+
+    reply_requested = Signal(object)   # yanıtlanacak EmailMessage
+    needs_reload = Signal()            # silme sonrası ana liste yenilensin
+    mark_seen = Signal(str)            # açılan INBOX mesajının key'i
+
+    def __init__(self, cfg: Config, backend: Backend, contacts: "Contacts | None",
+                 folder: str, key: str, *, summary=None, warned_keys=None,
+                 parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.backend = backend
+        self.contacts = contacts
+        self.folder = folder
+        self.key = key
+        self._raw = False
+        self._msg = None                   # son çözülen mesaj (yanıt için)
+        self._warned_keys = warned_keys if warned_keys is not None else set()
+        self._jobs: set = set()
+
+        who = ""
+        if summary is not None:
+            nm, ad = parseaddr(
+                (summary.to if folder in OUTGOING else summary.from_) or "")
+            who = nm or ad
+        subj = (getattr(summary, "subject", "") or "") or "(konu yok)"
+        self.setWindowTitle(f"{subj} — {who}" if who else subj)
+        self.resize(760, 560)
+
+        self.titlebar = QLabel(subj, objectName="titlebarText")
+        tb = QWidget(objectName="titlebar")
+        tbh = QHBoxLayout(tb)
+        tbh.setContentsMargins(8, 3, 8, 3)
+        tbh.addWidget(self.titlebar)
+        tbh.addStretch(1)
+
+        self.att_bar = QWidget(objectName="attBar")
+        self._att_lay = QHBoxLayout(self.att_bar)
+        self._att_lay.setContentsMargins(6, 3, 6, 3)
+        self._att_lay.setSpacing(6)
+        self.att_bar.hide()
+
+        self.body = QPlainTextEdit()
+        self.body.setReadOnly(True)
+
+        self.b_raw = QPushButton("Ham kaynak")
+        self.b_raw.setCheckable(True)
+        self.b_raw.toggled.connect(self._toggle_raw)
+        b_reply = QPushButton("Yanıtla")
+        b_reply.clicked.connect(self._reply)
+        b_del = QPushButton("Sil")
+        b_del.clicked.connect(self._delete)
+        b_close = QPushButton("Kapat")
+        b_close.clicked.connect(self.close)
+        row = QHBoxLayout()
+        row.setContentsMargins(8, 6, 8, 8)
+        row.setSpacing(6)
+        for b in (b_reply, self.b_raw, b_del):
+            row.addWidget(b)
+        row.addStretch(1)
+        row.addWidget(b_close)
+        row_w = QWidget()
+        row_w.setLayout(row)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        v.addWidget(tb)
+        v.addWidget(self.att_bar)
+        v.addWidget(self.body, 1)
+        v.addWidget(row_w)
+
+        QShortcut(QKeySequence("Esc"), self, self.close)
+        QShortcut(QKeySequence("R"), self, self._reply)
+        QShortcut(QKeySequence("X"), self, self.b_raw.toggle)
+
+        self._load()
+
+    # -- render -----------------------------------------------------
+    def _load(self) -> None:
+        self.body.setPlainText("mesaj açılıyor…")
+        self._set_attachments(None, [])
+        folder, key, raw = self.folder, self.key, self._raw
+
+        def done(result) -> None:
+            text, atts, warn, msg = result
+            self._msg = msg
+            if warn:
+                addr, old_fp, new_fp = warn
+                QMessageBox.warning(
+                    self, "Anahtar değişti",
+                    f"{addr} adresinin uçtan uca şifreleme anahtarı değişti.\n\n"
+                    f"Eski parmak izi: {old_fp}\nYeni parmak izi: {new_fp}\n\n"
+                    "onionmail bu değişikliği otomatik kabul etmedi (eski anahtar "
+                    "kullanılmaya devam ediyor). Beklenmedik bir değişiklikse "
+                    "karşı tarafla ayrı bir kanaldan doğrula.")
+            self.body.setPlainText(text)
+            self._set_attachments(key, atts)
+            if folder == "INBOX":
+                self.mark_seen.emit(key)
+
+        def fail(m: str) -> None:
+            self.body.setPlainText(f"(mesaj alınamadı: {m})")
+
+        w = _Worker(lambda: self._render_body(folder, key, raw))
+        w.ok.connect(done)
+        w.fail.connect(fail)
+        w.finished.connect(lambda: self._jobs.discard(w))
+        self._jobs.add(w)
+        w.start()
+
+    def _render_body(self, folder: str, key: str, raw: bool):
+        """Ağ çağrısı yapar — arka planda çalışır. Döner:
+        (metin, [(index, dosya, boyut, tür, riskli), ...], anahtar-uyarısı|None,
+        çözülen EmailMessage|None)."""
+        if raw:
+            return (self.backend.get_bytes(folder, key).decode("utf-8", "replace"),
+                    [], None, None)
+        msg = self.backend.get(folder, key)
+        warn = self._harvest_pubkey(msg)
+        badge = ""
+        if is_encrypted(msg):
+            head = "\n".join(f"{h}: {msg[h]}"
+                             for h in ("From", "To", "Cc", "Date") if msg[h])
+            sep = "\n" + "-" * 48 + "\n"
+            own = self.backend.keys
+            if not (own and own.unlocked):
+                return ("🔒 Şifreli mesaj — bu oturumda anahtar açık değil "
+                        "(çözmek için çıkış yapıp tekrar giriş yap)." + sep + head,
+                        [], warn, None)
+            try:
+                inner = decrypt_message(msg, own.secret)
+            except crypto.CryptoError as e:
+                return (f"🔒 Şifreli mesaj — çözülemedi: {e}" + sep + head,
+                        [], warn, None)
+            warn = warn or self._harvest_pubkey(inner)
+            msg = inner
+            badge = "🔒 Şifreli mesaj (çözüldü)\n"
+        head = "\n".join(f"{h}: {msg[h]}"
+                         for h in ("From", "To", "Cc", "Subject", "Date") if msg[h])
+        text = badge + head + "\n" + "-" * 48 + "\n" + safe_text(msg)
+        atts = [(p.index, p.filename, p.size, p.content_type, p.dangerous)
+                for p in list_parts(msg) if p.is_attachment]
+        return text, atts, warn, msg
+
+    def _harvest_pubkey(self, msg):
+        keys = self.backend.keys
+        pub = (msg.get(PUBKEY_HEADER) or "").strip()
+        if not keys or not pub:
+            return None
+        addr = parseaddr(str(msg.get("From") or ""))[1].strip().lower()
+        if not addr:
+            return None
+        prev = keys.peer_info(addr)
+        if keys.remember_peer(addr, pub, source="message") != "changed":
+            return None
+        new_fp = crypto.fingerprint(pub)
+        tag = f"{addr}:{new_fp}"
+        if tag in self._warned_keys:
+            return None
+        self._warned_keys.add(tag)
+        return addr, (prev or {}).get("fingerprint", "?"), new_fp
+
+    @staticmethod
+    def _hsize(n: int) -> str:
+        if n < 1024:
+            return f"{n} B"
+        if n < 1024 * 1024:
+            return f"{n / 1024:.1f} KB"
+        return f"{n / 1024 / 1024:.1f} MB"
+
+    def _set_attachments(self, key, atts) -> None:
+        while self._att_lay.count():
+            w = self._att_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        if not key or not atts:
+            self.att_bar.hide()
+            return
+        self._att_lay.addWidget(QLabel("Ekler:"))
+        for ix, fn, size, ct, danger in atts:
+            b = QPushButton(("[!] " if danger else "[EK] ") + fn)
+            b.setToolTip(f"{ct} · {self._hsize(size)}"
+                         + ("  ·  riskli tür — dikkatli aç" if danger else ""))
+            b.clicked.connect(
+                lambda _=False, k=key, i=ix, name=fn:
+                self._save_attachment(k, i, name))
+            self._att_lay.addWidget(b)
+        self._att_lay.addStretch(1)
+        self.att_bar.show()
+
+    def _save_attachment(self, key: str, index: int, filename: str) -> None:
+        start = str(Path.home() / filename)
+        dest, _ = QFileDialog.getSaveFileName(self, "Eki kaydet", start)
+        if not dest:
+            return
+        folder = self.folder
+        tmp = Path(dest + ".part")
+
+        def work(is_cancelled, _status):
+            msg = self.backend.get(folder, key)
+            if is_cancelled():
+                raise _Cancelled
+            for i, part in enumerate(msg.walk()):
+                if i == index and not part.is_multipart():
+                    data = part.get_payload(decode=True) or b""
+                    if is_cancelled():
+                        raise _Cancelled
+                    tmp.write_bytes(data)
+                    if is_cancelled():
+                        tmp.unlink(missing_ok=True)
+                        raise _Cancelled
+                    tmp.replace(dest)
+                    return dest
+            raise ValueError("ek parçası bulunamadı")
+
+        ok = run_busy(self, "Dosya indiriliyor", work,
+                      ok_text="İndirme tamamlandı", err_text="İndirme başarısız")
+        tmp.unlink(missing_ok=True)
+        if ok:
+            QMessageBox.information(self, "Kaydedildi", dest)
+
+    # -- actions --------------------------------------------------
+    def _toggle_raw(self, on: bool) -> None:
+        self._raw = on
+        self._load()
+
+    def _reply(self) -> None:
+        self.reply_requested.emit(self._msg or self.backend.get(self.folder, self.key))
+
+    def _delete(self) -> None:
+        if QMessageBox.question(
+                self, "Sil", "Bu mesaj silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        folder, key = self.folder, self.key
+
+        def work(is_cancelled, _status):
+            self.backend.delete(folder, key)
+
+        if run_busy(self, "Mesaj siliniyor", work,
+                    ok_text="Mesaj silindi", err_text="Silme başarısız"):
+            self.needs_reload.emit()
+            self.close()
+
+
+# --------------------------------------------------------------------------- #
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class MessagerWindow(QMainWindow):
@@ -1176,7 +1428,6 @@ class MessagerWindow(QMainWindow):
         self.backend = backend
         self.contacts = Contacts(_client_config_dir(cfg))
         self.folder_ix = 0
-        self._raw = False
         self._auth_dead = False
         self._rows: list = []
         self._children: list = []
@@ -1185,10 +1436,8 @@ class MessagerWindow(QMainWindow):
         self._inbox_seeded = False
         self._flash_timer: QTimer | None = None
         self._chime_fx = None
-        # --- mesaj gövdesi: arka planda getir + önbellek + debounce ---
+        # --- arka plan işleri (okundu işareti, otomatik yenileme) ---
         self._render_jobs: set = set()      # canlı _Worker referansları (GC koruması)
-        self._render_seq = 0                # en son istek sırası (eski cevapları ele)
-        self._body_cache: dict = {}         # (folder, key, raw) -> render edilmiş metin
         self._auto_busy = False             # _auto_refresh list() zaten çalışıyor mu
         self._warned_key_changes: set[str] = set()  # "adres:parmakizi" — bir kez uyar
         self._filter = ""                   # mesaj listesi arama sorgusu (küçük harf)
@@ -1237,33 +1486,8 @@ class MessagerWindow(QMainWindow):
         _esc.setContext(Qt.ShortcutContext.WidgetShortcut)
         _esc.activated.connect(self._clear_filter)
 
-        self._render_debounce = QTimer(self)
-        self._render_debounce.setSingleShot(True)
-        self._render_debounce.setInterval(120)
-        self._render_debounce.timeout.connect(self._render_selected)
-        self.table.currentCellChanged.connect(lambda *_: self._render_debounce.start())
-
-        self.body = QPlainTextEdit()
-        self.body.setReadOnly(True)
-
-        # ek dosya çubuğu: mesajda ek varsa gövdenin üstünde tıklanabilir düğmeler
-        self.att_bar = QWidget(objectName="attBar")
-        self._att_lay = QHBoxLayout(self.att_bar)
-        self._att_lay.setContentsMargins(6, 3, 6, 3)
-        self._att_lay.setSpacing(6)
-        self.att_bar.hide()
-
-        body_box = QWidget()
-        bv = QVBoxLayout(body_box)
-        bv.setContentsMargins(0, 0, 0, 0)
-        bv.setSpacing(0)
-        bv.addWidget(self.att_bar)
-        bv.addWidget(self.body, 1)
-
-        split = QSplitter(Qt.Orientation.Vertical)
-        split.addWidget(self.table)
-        split.addWidget(body_box)
-        split.setSizes([300, 360])
+        # mesaja çift tık / Enter → ayrı pencerede aç (ana pencerede önizleme yok)
+        self.table.doubleClicked.connect(self._open_selected)
 
         # üst çubuk: "Messager - KLASÖR" solda, arama kutusu sağda (ayrı satır yok)
         tb_row = QWidget()
@@ -1280,7 +1504,7 @@ class MessagerWindow(QMainWindow):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
         v.addWidget(tb_row)
-        v.addWidget(split, 1)
+        v.addWidget(self.table, 1)
         self.setCentralWidget(central)
 
         self.status = self.statusBar()
@@ -1312,7 +1536,8 @@ class MessagerWindow(QMainWindow):
         for keys, slot in (
             ("N", self.act_compose), ("R", self.act_reply), ("D", self.act_delete),
             ("Delete", self.act_delete), ("A", self.act_collector),
-            ("X", self.act_toggle_raw), ("F", self.act_flush), ("G", self.reload),
+            ("Return", self._open_selected), ("Enter", self._open_selected),
+            ("F", self.act_flush), ("G", self.reload),
             ("Ctrl+A", self.table.selectAll), ("Ctrl+Shift+A", self.table.clearSelection),
             ("Ctrl+F", self.search.setFocus),
             ("Ctrl+Tab", self.act_next_folder), ("?", self.act_help),
@@ -1404,8 +1629,7 @@ class MessagerWindow(QMainWindow):
             f"[{self.folder}]   N:new  R:reply  Ctrl+F:ara  D:sil  A:collector  ?:help"
         )
         if not rows:
-            self.body.setPlainText("")
-            self._set_attachments(None, [])
+            pass
         elif select:
             self.table.selectRow(0)
         elif prev_key is not None:
@@ -1435,169 +1659,34 @@ class MessagerWindow(QMainWindow):
         it = self.table.item(r, 0)
         return it.data(Qt.ItemDataRole.UserRole) if it else None
 
-    def _harvest_pubkey(self, msg) -> tuple[str, str, str] | None:
-        """Gelen mesajın X-Onionmail-Pubkey başlığını TOFU dizinine al.
-        Anahtar değiştiyse (ve bu oturumda bunun için henüz uyarılmadıysak)
-        `(adres, eski_parmak_izi, yeni_parmak_izi)` döner — arayan bunu ana
-        iş parçacığında kullanıcıya göstermeli."""
-        keys = self.backend.keys
-        pub = (msg.get(PUBKEY_HEADER) or "").strip()
-        if not keys or not pub:
-            return None
-        addr = parseaddr(str(msg.get("From") or ""))[1].strip().lower()
-        if not addr:
-            return None
-        prev = keys.peer_info(addr)
-        if keys.remember_peer(addr, pub, source="message") != "changed":
-            return None
-        new_fp = crypto.fingerprint(pub)
-        tag = f"{addr}:{new_fp}"
-        if tag in self._warned_key_changes:
-            return None
-        self._warned_key_changes.add(tag)
-        return addr, (prev or {}).get("fingerprint", "?"), new_fp
-
-    def _render_body(self, folder: str, key: str, raw: bool):
-        """Ağ çağrısı yapar — arka plan iş parçacığında çalıştırılmalı.
-        Döner: (gövde metni, [(index, dosya, boyut, tür, riskli), ...],
-        anahtar-değişti-uyarısı-ya-da-None)."""
-        if raw:
-            return self.backend.get_bytes(folder, key).decode("utf-8", "replace"), [], None
-        msg = self.backend.get(folder, key)
-        warn = self._harvest_pubkey(msg)
-        badge = ""
-        if is_encrypted(msg):
-            head = "\n".join(f"{h}: {msg[h]}" for h in ("From", "To", "Cc", "Date") if msg[h])
-            sep = "\n" + "-" * 48 + "\n"
-            own = self.backend.keys
-            if not (own and own.unlocked):
-                return ("🔒 Şifreli mesaj — bu oturumda anahtar açık değil "
-                        "(çözmek için çıkış yapıp tekrar giriş yap)." + sep + head), [], warn
-            try:
-                inner = decrypt_message(msg, own.secret)
-            except crypto.CryptoError as e:
-                return f"🔒 Şifreli mesaj — çözülemedi: {e}" + sep + head, [], warn
-            warn = warn or self._harvest_pubkey(inner)  # iç başlıkta da olabilir
-            msg = inner
-            badge = "🔒 Şifreli mesaj (çözüldü)\n"
-        head = "\n".join(f"{h}: {msg[h]}"
-                         for h in ("From", "To", "Cc", "Subject", "Date") if msg[h])
-        text = badge + head + "\n" + "-" * 48 + "\n" + safe_text(msg)
-        atts = [(p.index, p.filename, p.size, p.content_type, p.dangerous)
-                for p in list_parts(msg) if p.is_attachment]
-        return text, atts, warn
-
-    @staticmethod
-    def _hsize(n: int) -> str:
-        if n < 1024:
-            return f"{n} B"
-        if n < 1024 * 1024:
-            return f"{n / 1024:.1f} KB"
-        return f"{n / 1024 / 1024:.1f} MB"
-
-    def _set_attachments(self, key: str | None, atts: list) -> None:
-        while self._att_lay.count():
-            w = self._att_lay.takeAt(0).widget()
-            if w is not None:
-                w.deleteLater()
-        if not key or not atts:
-            self.att_bar.hide()
-            return
-        self._att_lay.addWidget(QLabel("Ekler:"))
-        for ix, fn, size, ct, danger in atts:
-            b = QPushButton(("[!] " if danger else "[EK] ") + fn)
-            b.setToolTip(f"{ct} · {self._hsize(size)}"
-                         + ("  ·  riskli tür — dikkatli aç" if danger else ""))
-            b.clicked.connect(
-                lambda _=False, k=key, i=ix, name=fn: self._save_attachment(k, i, name))
-            self._att_lay.addWidget(b)
-        self._att_lay.addStretch(1)
-        self.att_bar.show()
-
-    def _save_attachment(self, key: str, index: int, filename: str) -> None:
-        start = str(Path.home() / filename)
-        dest, _ = QFileDialog.getSaveFileName(self, "Eki kaydet", start)
-        if not dest:
-            return
-        folder = self.folder
-        tmp = Path(dest + ".part")
-
-        def work(is_cancelled, _status):
-            msg = self.backend.get(folder, key)
-            if is_cancelled():
-                raise _Cancelled
-            for i, part in enumerate(msg.walk()):
-                if i == index and not part.is_multipart():
-                    data = part.get_payload(decode=True) or b""
-                    if is_cancelled():
-                        raise _Cancelled
-                    tmp.write_bytes(data)
-                    if is_cancelled():
-                        tmp.unlink(missing_ok=True)
-                        raise _Cancelled
-                    tmp.replace(dest)
-                    return dest
-            raise ValueError("ek parçası bulunamadı")
-
-        ok = run_busy(self, "Dosya indiriliyor", work,
-                      ok_text="İndirme tamamlandı", err_text="İndirme başarısız")
-        tmp.unlink(missing_ok=True)   # iptal/hata artığı
-        if ok:
-            self.status.showMessage(f"kaydedildi: {dest}")
-
-    def _render_selected(self) -> None:
+    def _open_selected(self, *_) -> None:
+        """Seçili mesajı ayrı bir pencerede aç."""
         key = self._selected_key()
         if not key:
-            self.body.setPlainText("")
-            self._set_attachments(None, [])
             return
-        folder, raw = self.folder, self._raw
-        ck = (folder, key, raw)
-        cached = self._body_cache.get(ck)
-        if cached is not None:
-            text, atts = cached
-            self.body.setPlainText(text)
-            self._set_attachments(key, atts)
-            if folder == "INBOX":
-                self._mark_seen_async(key)
-            return
+        summ = next((s for s in self._rows if s.key == key), None)
+        w = MessageWindow(self.cfg, self.backend, self.contacts, self.folder,
+                          key, summary=summ, warned_keys=self._warned_key_changes)
+        w.reply_requested.connect(self._reply_from_msg)
+        w.needs_reload.connect(self.reload)
+        w.mark_seen.connect(self._mark_seen_async)
+        w.destroyed.connect(
+            lambda: self._children.remove(w) if w in self._children else None)
+        self._children.append(w)
+        w.show()
+        w.raise_()
+        w.activateWindow()
 
-        self._render_seq += 1
-        seq = self._render_seq
-        self.body.setPlainText("mesaj açılıyor…")
-        self._set_attachments(None, [])
-
-        def done(result) -> None:
-            if seq != self._render_seq:
-                return  # kullanıcı bu arada başka satıra geçti
-            text, atts, warn = result
-            if len(self._body_cache) > 200:
-                self._body_cache.clear()
-            self._body_cache[ck] = (text, atts)
-            if warn:
-                addr, old_fp, new_fp = warn
-                QMessageBox.warning(
-                    self, "Anahtar değişti",
-                    f"{addr} adresinin uçtan uca şifreleme anahtarı değişti.\n\n"
-                    f"Eski parmak izi: {old_fp}\nYeni parmak izi: {new_fp}\n\n"
-                    "onionmail bu değişikliği otomatik kabul etmedi (eski anahtar "
-                    "kullanılmaya devam ediyor). Beklenmedik bir değişiklikse "
-                    "karşı tarafla ayrı bir kanaldan doğrula.")
-            self.body.setPlainText(text)
-            self._set_attachments(key, atts)
-            if folder == "INBOX":
-                self._mark_seen_async(key)
-
-        def fail(msg: str) -> None:
-            if seq == self._render_seq:
-                self.body.setPlainText(f"(mesaj alınamadı: {msg})")
-
-        w = _Worker(lambda: self._render_body(folder, key, raw))
-        w.ok.connect(done)
-        w.fail.connect(fail)
-        w.finished.connect(lambda: self._render_jobs.discard(w))
-        self._render_jobs.add(w)
-        w.start()
+    def _reply_from_msg(self, msg) -> None:
+        quoted = "\n".join("> " + ln for ln in safe_text(msg).splitlines())
+        self._spawn(ComposeWindow(
+            self.cfg, self.backend,
+            to=str(msg["From"] or ""),
+            subject="Re: " + str(msg["Subject"] or ""),
+            body="\n\n" + quoted,
+            in_reply_to=str(msg["Message-ID"] or "") or None,
+            contacts=self.contacts,
+        ))
 
     def _mark_seen_async(self, key: str) -> None:
         """Okundu işaretini arka planda yolla; satırdaki » imini hemen kaldır."""
@@ -1730,7 +1819,6 @@ class MessagerWindow(QMainWindow):
     # -- actions -----------------------------------------------------
     def _goto(self, ix: int) -> None:
         self.folder_ix = ix % len(FOLDERS)
-        self._raw = False
         if self._filter:
             self.search.clear()
             self._filter = ""
@@ -1738,10 +1826,6 @@ class MessagerWindow(QMainWindow):
 
     def act_next_folder(self) -> None:
         self._goto(self.folder_ix + 1)
-
-    def act_toggle_raw(self) -> None:
-        self._raw = not self._raw
-        self._render_selected()
 
     def _spawn(self, w: ComposeWindow) -> None:
         w.sent.connect(self.reload)
@@ -1756,16 +1840,7 @@ class MessagerWindow(QMainWindow):
         key = self._selected_key()
         if not key:
             return
-        msg = self.backend.get(self.folder, key)
-        quoted = "\n".join("> " + ln for ln in safe_text(msg).splitlines())
-        self._spawn(ComposeWindow(
-            self.cfg, self.backend,
-            to=str(msg["From"] or ""),
-            subject="Re: " + str(msg["Subject"] or ""),
-            body="\n\n" + quoted,
-            in_reply_to=str(msg["Message-ID"] or "") or None,
-            contacts=self.contacts,
-        ))
+        self._reply_from_msg(self.backend.get(self.folder, key))
 
     def _selected_keys(self) -> list[str]:
         keys: list[str] = []
@@ -1817,9 +1892,6 @@ class MessagerWindow(QMainWindow):
 
         done_n = result["n"]
         if done_n:
-            dead = set(keys[:done_n])
-            self._body_cache = {k: v for k, v in self._body_cache.items()
-                                if k[1] not in dead}
             self.reload()
         if ok:
             self.status.showMessage(f"{done_n} mesaj silindi  [{self.folder}]", 6000)
@@ -1835,6 +1907,9 @@ class MessagerWindow(QMainWindow):
     def _table_menu(self, pos) -> None:
         m = QMenu(self)
         sel = len(self._selected_keys())
+        a_open = m.addAction("Aç")
+        a_open.setEnabled(sel == 1)
+        m.addSeparator()
         a_all = m.addAction("Tümünü seç")
         a_clear = m.addAction("Seçimi temizle")
         m.addSeparator()
@@ -1844,7 +1919,9 @@ class MessagerWindow(QMainWindow):
         a_del = m.addAction(f"Seçileni sil ({sel})" if sel else "Seçileni sil")
         a_del.setEnabled(sel > 0)
         chosen = m.exec(self.table.viewport().mapToGlobal(pos))
-        if chosen == a_all:
+        if chosen == a_open:
+            self._open_selected()
+        elif chosen == a_all:
             self.table.selectAll()
         elif chosen == a_clear:
             self.table.clearSelection()
@@ -1895,11 +1972,13 @@ class MessagerWindow(QMainWindow):
     def act_help(self) -> None:
         QMessageBox.information(self, "Help", (
             "Messager — kısayollar\n\n"
+            "Enter / çift tık  mesajı ayrı pencerede aç\n"
             "N  yeni mesaj      R  yanıtla       D  sil\n"
-            "A  collector (sandbox)              X  ham kaynak\n"
-            "Ctrl+Tab  sonraki klasör           G  yenile\n"
+            "A  collector (sandbox)             G  yenile\n"
+            "Ctrl+Tab  sonraki klasör\n"
             "Ctrl+F  aramaya odaklan (kimden/kime/konu)  Esc  aramayı temizle\n"
             "F  gideni şimdi gönder (yerel mod)  ?  bu ekran   Ctrl+Q  çık\n\n"
+            "Mesaj penceresi: R yanıtla · X ham kaynak · Esc kapat\n"
             "Menü: Email = yeni mesaj · Settings = sunucu/hesap · Help = bu ekran"
         ))
 
