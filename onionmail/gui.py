@@ -1196,7 +1196,14 @@ class MessageWindow(QWidget):
             who = nm or ad
         subj = (getattr(summary, "subject", "") or "") or "(konu yok)"
         self.setWindowTitle(f"{subj} — {who}" if who else subj)
-        self.resize(760, 560)
+
+        # Açılış boyutu: 120x35 karakterlik monospace ızgara (ana pencereyle
+        # aynı mantık; sonra serbestçe boyutlandırılabilir).
+        _f = QFont("DejaVu Sans Mono")
+        _f.setPixelSize(13)              # QSS ile aynı
+        _fm = QFontMetrics(_f)
+        self.resize(_fm.horizontalAdvance("M") * 120 + 18,   # + kenarlık / kaydırma
+                    _fm.height() * 35 + 76)                   # + başlık + düğme satırı
 
         self.titlebar = QLabel(subj, objectName="titlebarText")
         tb = QWidget(objectName="titlebar")
