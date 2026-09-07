@@ -623,8 +623,9 @@ def unlock_keys_prompt(cfg: Config, address: str, *, client: NetClient | None = 
                        parent=None) -> ClientKeys | None:
     """Şifreleme anahtarını parolayla aç. Kaydedilmiş oturumla açılışta (oturum
     token'ı parola-mühürlü anahtar deposunu açamaz) ya da sonradan Anahtarlar
-    penceresinden çağrılır. İptal / yanlış parola → None döner, o oturumda
-    şifreleme kapalı kalır."""
+    penceresinden çağrılır. İptal / yanlış parola → None döner. Anahtarlar
+    penceresinden çağrıldıysa bu sadece o oturumda şifrelemeyi kapalı bırakır;
+    açılışta ise `run()` bunu reddetme sayıp uygulamayı kapatır."""
     if not crypto.HAVE_AGE or not address:
         return None
     if not (_client_config_dir(cfg) / "keys.json").is_file():
@@ -640,7 +641,7 @@ def unlock_keys_prompt(cfg: Config, address: str, *, client: NetClient | None = 
         _secret, public, created = keys.unlock_or_create(address, pw)
     except crypto.CryptoError:
         QMessageBox.warning(parent, "Şifreleme anahtarı",
-                            "Parola yanlış — bu oturumda şifreleme kapalı.")
+                            "Parola yanlış — şifreleme anahtarı açılmadı.")
         return None
     if client is not None:
         try:
@@ -2044,7 +2045,13 @@ def run(cfg: Config, local: bool = False) -> None:
     sess = load_session(cfg)
     if sess:
         client = client_from_session(sess)
-        keys = unlock_keys_prompt(cfg, sess.get("address", ""), client=client)
+        address = sess.get("address", "")
+        keys = unlock_keys_prompt(cfg, address, client=client)
+        if keys is None and crypto.HAVE_AGE and address \
+                and (_client_config_dir(cfg) / "keys.json").is_file():
+            # şifreleme anahtarı var ama parola istemi iptal edildi / yanlıştı
+            # → posta kutusunu açma, çık
+            sys.exit(0)
         open_main(NetBackend(client, keys=keys))
     else:
         open_login()
