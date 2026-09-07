@@ -1,17 +1,17 @@
-# onionmail yapılandırması. Kopyala: ~/.config/onionmail/config.toml
-# Yol öncelik sırası: --config BAYRAĞI > ONIONMAIL_CONFIG env > ~/.config/onionmail/config.toml
+# onionmail configuration. Copy to: ~/.config/onionmail/config.toml
+# Path precedence: --config FLAG > ONIONMAIL_CONFIG env > ~/.config/onionmail/config.toml
 
 [identity]
-# Kendi onion adresin. Boş bırakırsan hostname_file'dan okunur (Tor bunu üretir).
+# Your own onion address. Leave empty to read it from hostname_file (Tor generates it).
 onion = ""
 hostname_file = "/var/lib/tor/onionmail/hostname"
-# <local_user>@<onion> adresine gelen mailler kabul edilir.
+# Mail addressed to <local_user>@<onion> is accepted.
 local_user = "nejarm"
-# Kabul edilecek ek tam adresler (ör. takma adlar).
+# Extra full addresses to accept (e.g. aliases).
 extra_addresses = []
 
 [smtpd]
-# Tor'un HiddenServicePort'u buraya yönlendirir. ASLA 0.0.0.0'a açma.
+# Tor's HiddenServicePort forwards here. NEVER bind to 0.0.0.0.
 host = "127.0.0.1"
 port = 8025
 max_message_bytes = 26214400   # 25 MiB
@@ -19,49 +19,49 @@ max_rcpt = 10
 
 [sender]
 socks_host = "127.0.0.1"
-socks_port = 9050              # Tor SOCKS; Tor Browser kullanıyorsan 9150
-timeout = 120                 # onion yavaş olabilir, cömert tut
-# Başarısız teslimde tekrar deneme aralıkları (saniye). Son değer sonrası vazgeçilir.
+socks_port = 9050              # Tor SOCKS; use 9150 if you run Tor Browser
+timeout = 120                 # onion can be slow, keep it generous
+# Retry intervals after a failed delivery (seconds). Give up after the last value.
 retry_delays = [60, 300, 900, 3600, 10800, 43200]
 
 [storage]
 maildir = "~/.local/share/onionmail/Maildir"
 
 [policy]
-# true ise, yalnızca allowed_sender_onions listesindeki onion'lardan mail kabul edilir.
+# If true, mail is accepted only from onions in the allowed_sender_onions list.
 allowlist_only = false
 allowed_sender_onions = []
 
 # ------------------------------------------------------------------------
-# ÇOK KULLANICILI MOD (ağdan login). Kapalıysa tek kutu = [identity].local_user.
+# MULTI-USER MODE (login over the network). If off, single mailbox = [identity].local_user.
 # ------------------------------------------------------------------------
 [accounts]
-enabled = false                                   # true: her kullanıcı ayrı hesap
-store_path = "~/.local/share/onionmail/accounts"  # sunucuda: /var/lib/onionmail/accounts
-open_registration = false                         # false: kayıt davet kodu ister
-session_ttl = 3600                                # oturum token'ı ömrü (sn)
-max_failed = 5                                    # bu kadar hatalı girişten sonra kilit
+enabled = false                                   # true: a separate account per user
+store_path = "~/.local/share/onionmail/accounts"  # on the server: /var/lib/onionmail/accounts
+open_registration = false                         # false: registration requires an invite code
+session_ttl = 3600                                # session token lifetime (s)
+max_failed = 5                                    # lock after this many failed logins
 lock_minutes = 15
 min_password_len = 8
 
 [api]
-# apid servisi. Tor bunu 2. bir HiddenServicePort ile aynı .onion'da yayınlar.
+# The apid service. Tor publishes it on the same .onion via a 2nd HiddenServicePort.
 host = "127.0.0.1"
 port = 8443
-preshared_key = ""                               # boş değilse istemci de vermeli
+preshared_key = ""                               # if non-empty, the client must supply it too
 
 # ------------------------------------------------------------------------
-# İSTEMCİ tarafı (GUI'nin çalıştığı makinede). Sunucuda gerekmez.
-# GUI Settings paneli bunları ~/.config/onionmail/client.json'a da yazabilir.
+# CLIENT side (on the machine where the GUI runs). Not needed on the server.
+# The GUI Settings panel can also write these to ~/.config/onionmail/client.json.
 # ------------------------------------------------------------------------
 [client]
-server_onion = ""                                # bağlanılacak sunucunun .onion'u
+server_onion = ""                                # the .onion of the server to connect to
 preshared_key = ""
 session_path = "~/.config/onionmail/session.json"
 
 [sandbox]
-# Güvenilmeyen ekleri/HTML'i izole ortamda açmak için.
+# For opening untrusted attachments / HTML in an isolated environment.
 backend = "firejail"          # "firejail" | "bwrap" | "none"
 workdir = "~/.cache/onionmail/sandbox"
-# Ek açarken kullanılacak görüntüleyici. Sandbox içinde çalışır.
+# Viewer used when opening an attachment. Runs inside the sandbox.
 viewer = "xdg-open"

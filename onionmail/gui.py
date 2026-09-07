@@ -128,9 +128,9 @@ class ComposeWindow(QWidget):
         self.e_cc = QLineEdit(cc)
         self.e_to = QLineEdit(to)
         self.e_bcc = QLineEdit(bcc)
-        self.e_to.setPlaceholderText("alıcı@<56 karakter>.onion ya da takma ad")
-        self.e_cc.setPlaceholderText("ad@<onion>, ...")
-        self.e_bcc.setPlaceholderText("gizli@<onion>, ...")
+        self.e_to.setPlaceholderText("recipient@<56 chars>.onion or a nickname")
+        self.e_cc.setPlaceholderText("name@<onion>, ...")
+        self.e_bcc.setPlaceholderText("bcc@<onion>, ...")
         for col, text in ((0, "Subject:"), (1, "CC:")):
             lb = QLabel(text); lb.setObjectName("fieldLabel")
             grid.addWidget(lb, 0, col)
@@ -143,7 +143,7 @@ class ComposeWindow(QWidget):
         to_lay = QHBoxLayout(to_row)
         to_lay.setContentsMargins(0, 0, 0, 0)
         to_lay.addWidget(self.e_to, 1)
-        b_contacts = QPushButton("Kişiler")
+        b_contacts = QPushButton("Contacts")
         b_contacts.setEnabled(self.contacts is not None)
         b_contacts.clicked.connect(self._pick_contact)
         to_lay.addWidget(b_contacts)
@@ -157,7 +157,7 @@ class ComposeWindow(QWidget):
 
         arow = QHBoxLayout()
         self.e_attach = QLineEdit()
-        self.e_attach.setPlaceholderText("Attachments:  (dosya yolları, virgülle)")
+        self.e_attach.setPlaceholderText("Attachments:  (file paths, comma-separated)")
         b_attach = QPushButton("…")
         b_attach.setFixedWidth(40)
         b_attach.clicked.connect(self._pick_files)
@@ -171,16 +171,17 @@ class ComposeWindow(QWidget):
         lay.addWidget(self.e_body, 1)
 
         btns = QHBoxLayout()
-        self.lbl_err = QLabel("Ctrl+S: gönder   ·   Esc: kapat")
+        self.lbl_err = QLabel("Ctrl+S: send   ·   Esc: close")
         btns.addWidget(self.lbl_err, 1)
-        self.chk_encrypt = QCheckBox("🔒 Şifrele")
+        self.chk_encrypt = QCheckBox("🔒 Encrypt")
         can_encrypt = bool(getattr(backend, "keys", None))
         self.chk_encrypt.setEnabled(can_encrypt)
         self.chk_encrypt.setToolTip(
-            "Alıcı(lar)ın açık anahtarı bulunursa mesaj uçtan uca şifrelenir."
+            "If the recipient(s) public key is found, the message is "
+            "end-to-end encrypted."
             if can_encrypt else
-            "Uçtan uca şifreleme bu oturumda kapalı (pyrage kurulu değil ya da "
-            "giriş sırasında anahtar açılamadı).")
+            "End-to-end encryption is off this session (pyrage not installed, "
+            "or the key could not be unlocked at login).")
         btns.addWidget(self.chk_encrypt)
         b_cancel = QPushButton("Cancel")
         b_cancel.clicked.connect(self.close)
@@ -195,7 +196,7 @@ class ComposeWindow(QWidget):
         QShortcut(QKeySequence("Esc"), self, self.close)
 
     def _pick_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Ek seç")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choose attachments")
         if paths:
             cur = [p for p in self.e_attach.text().split(",") if p.strip()]
             self.e_attach.setText(", ".join(cur + paths))
@@ -212,10 +213,10 @@ class ComposeWindow(QWidget):
         self.e_to.setText(", ".join(cur))
 
     def _resolve_pubkeys(self, addrs: list[str], is_cancelled) -> tuple[dict[str, str], list[str]]:
-        """Her alıcı için age açık anahtarını bul: önce TOFU önbelleği, yoksa
-        (uzak backend ise) sunucudan sor + önbelleğe al. Zaten bilinen bir
-        anahtar sunucudakiyle farklıysa TOFU'yu sessizce değiştirmeyiz —
-        stored (eski) anahtar kullanılmaya devam eder."""
+        """Find each recipient's age public key: TOFU cache first, otherwise
+        (if the backend is remote) ask the server + cache it. If a key we
+        already know differs from the server's, we do not silently change
+        TOFU — the stored (old) key keeps being used."""
         keys = self.backend.keys
         client = getattr(self.backend, "client", None)
         pubs: dict[str, str] = {}
@@ -240,8 +241,8 @@ class ComposeWindow(QWidget):
         return pubs, missing
 
     def _resolve_addrs(self, text: str) -> list[str]:
-        """Virgülle ayrılmış alanı çöz: bilinen takma adları (kişi defteri)
-        onion adresine çevirir, bilinmeyenleri olduğu gibi bırakır."""
+        """Resolve a comma-separated field: turn known nicknames (contact
+        book) into onion addresses, leave unknown entries as-is."""
         parts = [p.strip() for p in text.split(",") if p.strip()]
         if not self.contacts:
             return parts
@@ -250,15 +251,15 @@ class ComposeWindow(QWidget):
     def _send(self) -> None:
         to = self._resolve_addrs(self.e_to.text())
         if not to:
-            self.lbl_err.setText("alıcı gerekli")
+            self.lbl_err.setText("recipient required")
             return
         attach = [Path(p.strip()) for p in self.e_attach.text().split(",") if p.strip()]
         missing_files = [str(p) for p in attach if not p.is_file()]
         if missing_files:
-            self.lbl_err.setText("dosya yok: " + ", ".join(missing_files))
+            self.lbl_err.setText("file not found: " + ", ".join(missing_files))
             return
         cc = self._resolve_addrs(self.e_cc.text())
-        subject = self.e_subject.text().strip() or "(konu yok)"
+        subject = self.e_subject.text().strip() or "(no subject)"
         body = self.e_body.toPlainText()
         bcc = self._resolve_addrs(self.e_bcc.text())
         in_reply_to = self._in_reply_to
@@ -273,20 +274,20 @@ class ComposeWindow(QWidget):
         def work(is_cancelled, set_status):
             encrypt_to = None
             if want_encrypt:
-                set_status("Alıcı anahtarı aranıyor…")
+                set_status("Looking up recipient key…")
                 pubs, missing = self._resolve_pubkeys(rcpts, is_cancelled)
                 if missing:
                     raise ValueError(
-                        "açık anahtar bulunamadı: " + ", ".join(missing) +
-                        " — 🔒 kutusunu kaldırıp düz gönderebilirsin")
+                        "public key not found: " + ", ".join(missing) +
+                        " — uncheck 🔒 to send unencrypted")
                 encrypt_to = list(pubs.values())
-                set_status("Anahtar bulundu — mesaj gönderiliyor…")
+                set_status("Key found — sending message…")
             if is_cancelled():
                 raise _Cancelled
             self.backend.send(msg, bcc=bcc, encrypt_to=encrypt_to)
 
-        if run_busy(self, "Mesaj gönderiliyor", work,
-                    ok_text="Mesaj gönderildi", err_text="Gönderim başarısız"):
+        if run_busy(self, "Sending message", work,
+                    ok_text="Message sent", err_text="Send failed"):
             self.sent.emit()
             self.close()
 
@@ -299,12 +300,12 @@ class CollectorDialog(QDialog):
         super().__init__(parent)
         self.cfg, self.backend, self.folder, self.key = cfg, backend, folder, key
         self.msg = backend.get(folder, key)
-        self.setWindowTitle("Collector — ek / parça incelemesi")
+        self.setWindowTitle("Collector — attachment / part review")
         self.resize(680, 420)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        t = QLabel("Collector — ek / parça incelemesi"); t.setObjectName("modalTitle")
+        t = QLabel("Collector — attachment / part review"); t.setObjectName("modalTitle")
         lay.addWidget(t)
 
         inner = QWidget(); lay.addWidget(inner, 1)
@@ -313,27 +314,27 @@ class CollectorDialog(QDialog):
         avail = backend_available(cfg)
         v.addWidget(QLabel(
             f"backend: {cfg.sandbox.backend} "
-            + ("[hazır — 'ağ yok' izole açma]" if avail
-               else "[yok — sadece güvenli metin / diske çıkarma]")))
+            + ("[ready — isolated 'no network' open]" if avail
+               else "[unavailable — safe text / extract to disk only]")))
 
         self.parts = list_parts(self.msg)
         self.table = QTableWidget(len(self.parts), 5)
-        self.table.setHorizontalHeaderLabels(["#", "tür", "dosya", "boyut", "risk"])
+        self.table.setHorizontalHeaderLabels(["#", "type", "file", "size", "risk"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         for r, p in enumerate(self.parts):
             for c, val in enumerate((str(p.index), p.content_type, p.filename,
-                                     str(p.size), "YÜKSEK" if p.dangerous else "-")):
+                                     str(p.size), "HIGH" if p.dangerous else "-")):
                 self.table.setItem(r, c, QTableWidgetItem(val))
         self.table.resizeColumnsToContents()
         v.addWidget(self.table, 1)
 
         row = QHBoxLayout()
-        for label, slot in (("İzole aç", self._open),
-                            ("Güvenli metin", self._safe_text),
-                            ("Diske çıkar", self._extract),
-                            ("Kapat", self.accept)):
+        for label, slot in (("Open isolated", self._open),
+                            ("Safe text", self._safe_text),
+                            ("Extract to disk", self._extract),
+                            ("Close", self.accept)):
             b = QPushButton(label); b.clicked.connect(slot); row.addWidget(b)
         lay.addLayout(row)
 
@@ -351,7 +352,7 @@ class CollectorDialog(QDialog):
         if ix is None:
             return
         path = extract_part(self.msg, ix, self._dest())
-        QMessageBox.information(self, "Çıkarıldı", str(path))
+        QMessageBox.information(self, "Extracted", str(path))
 
     def _open(self) -> None:
         ix = self._sel_index()
@@ -360,15 +361,15 @@ class CollectorDialog(QDialog):
         path = extract_part(self.msg, ix, self._dest())
         proc = open_attachment(path, self.cfg)
         if proc is None:
-            QMessageBox.warning(self, "Sandbox yok",
-                                f"backend yok; diske çıkarıldı:\n{path}")
+            QMessageBox.warning(self, "No sandbox",
+                                f"no backend; extracted to disk:\n{path}")
         else:
-            QMessageBox.information(self, "Açıldı",
-                                   f"İzole ortamda açıldı (ağ yok):\n{path.name}")
+            QMessageBox.information(self, "Opened",
+                                   f"Opened in an isolated environment (no network):\n{path.name}")
 
     def _safe_text(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Güvenli metin (nötrlenmiş)")
+        dlg.setWindowTitle("Safe text (neutralised)")
         dlg.resize(640, 480)
         lay = QVBoxLayout(dlg)
         te = QPlainTextEdit(safe_text(self.msg))
@@ -383,7 +384,7 @@ class CollectorDialog(QDialog):
 class _Worker(QThread):
     ok = Signal(object)
     fail = Signal(str)
-    status = Signal(str)   # run_busy: work() ilerleme metnini güncellemek için
+    status = Signal(str)   # run_busy: to update work() progress text
 
     def __init__(self, fn):
         super().__init__()
@@ -397,25 +398,25 @@ class _Worker(QThread):
 
 
 class _Cancelled(Exception):
-    """work() içinde kullanıcı iptal ettiğinde fırlatılır."""
+    """Raised inside work() when the user cancels."""
 
 
-# İptal edilip diyaloğu kapanan ama hâlâ koşan worker'lar burada tutulur ki
-# QThread nesnesi çalışırken çöpe gitmesin (Qt aksi halde abort eder).
+# Workers whose dialog was cancelled/closed but that are still running are
+# kept here so the QThread object is not GC'd mid-run (Qt would abort otherwise).
 _LIVE_WORKERS: set = set()
 
 
 class BusyDialog(QDialog):
-    """Kare kare ilerleyen mavi çubuklu küçük işlem penceresi. Çerçevesiz,
-    ortalı düz yazı. İş sürerken 'İptal', bitince 'OK' düğmesi görünür."""
+    """Small work dialog with a frame-by-frame blue bar. Borderless,
+    centred plain text. 'Cancel' shows while working, 'OK' when done."""
 
-    def __init__(self, parent, busy_text: str = "İşlem sürüyor"):
+    def __init__(self, parent, busy_text: str = "Working"):
         super().__init__(parent)
         self.setWindowTitle(busy_text)
         self.setModal(True)
         self.setMinimumWidth(380)
         self._done = False
-        self.on_cancel = None            # run_busy tarafından atanır
+        self.on_cancel = None            # assigned by run_busy
 
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 16, 18, 16)
@@ -433,10 +434,10 @@ class BusyDialog(QDialog):
         self.bar.setTextVisible(False)
         v.addWidget(self.bar)
 
-        self.cancel = QPushButton("İptal")
+        self.cancel = QPushButton("Cancel")
         self.cancel.clicked.connect(self._cancel_clicked)
         self.ok = QPushButton("OK")
-        self.ok.setVisible(False)          # yalnızca iş bitince görünür
+        self.ok.setVisible(False)          # shown only when the job is done
         self.ok.clicked.connect(self.accept)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -479,7 +480,7 @@ class BusyDialog(QDialog):
         self.ok.setFocus()
         self.adjustSize()
 
-    # iş bitmeden Esc/çarpı ile kapanmayı engelle (kapatmak için İptal var)
+    # block closing with Esc/X before the job is done (use Cancel to close)
     def reject(self) -> None:
         if self._done:
             super().reject()
@@ -489,13 +490,13 @@ class BusyDialog(QDialog):
 
 
 def run_busy(parent, busy_text: str, work, *,
-             ok_text: str = "İşlem tamamlandı", err_text: str = "İşlem başarısız") -> bool:
-    """`work(is_cancelled, set_status)`'ı arka planda çalıştırır, BusyDialog
-    gösterir. `is_cancelled`: iptal edildiyse True döndüren çağrılabilir.
-    `set_status(text)`: diyaloğun üstündeki metni günceller (çok aşamalı
-    işlerde — ör. "anahtar aranıyor" → "gönderiliyor" — ayrı bir onay
-    penceresi açmadan tek diyalog içinde ilerleme göstermek için).
-    Başarılıysa True, iptal/hata ise False döner."""
+             ok_text: str = "Done", err_text: str = "Failed") -> bool:
+    """Run `work(is_cancelled, set_status)` in the background, showing a
+    BusyDialog. `is_cancelled`: a callable returning True if cancelled.
+    `set_status(text)`: updates the text above the dialog (for multi-stage
+    jobs — e.g. "looking up key" → "sending" — to show progress inside one
+    dialog without opening a separate confirmation window).
+    Returns True on success, False on cancel/error."""
     dlg = BusyDialog(parent, busy_text)
     state = {"ok": False, "cancelled": False}
     ev = threading.Event()
@@ -523,7 +524,7 @@ def run_busy(parent, busy_text: str, work, *,
     w.status.connect(dlg.note.setText)
     _LIVE_WORKERS.add(w)
     w.finished.connect(lambda: _LIVE_WORKERS.discard(w))
-    dlg._worker_ref = w  # GC koruması
+    dlg._worker_ref = w  # GC guard
     dlg.start()
     w.start()
     dlg.exec()
@@ -621,18 +622,18 @@ def client_from_session(d: dict) -> NetClient:
 
 def unlock_keys_prompt(cfg: Config, address: str, *, client: NetClient | None = None,
                        parent=None) -> ClientKeys | None:
-    """Şifreleme anahtarını parolayla aç. Kaydedilmiş oturumla açılışta (oturum
-    token'ı parola-mühürlü anahtar deposunu açamaz) ya da sonradan Anahtarlar
-    penceresinden çağrılır. İptal / yanlış parola → None döner. Anahtarlar
-    penceresinden çağrıldıysa bu sadece o oturumda şifrelemeyi kapalı bırakır;
-    açılışta ise `run()` bunu reddetme sayıp uygulamayı kapatır."""
+    """Unlock the encryption key with a passphrase. Called at startup with a
+    saved session (the session token cannot open the passphrase-sealed key
+    store) or later from the Keys window. Cancel / wrong passphrase → returns
+    None. When called from the Keys window that just leaves encryption off for
+    the session; at startup `run()` treats it as a refusal and quits."""
     if not crypto.HAVE_AGE or not address:
         return None
     if not (_client_config_dir(cfg) / "keys.json").is_file():
         return None
     pw, ok = QInputDialog.getText(
-        parent, "Şifreleme anahtarı",
-        f"{address}\nAnahtar parolası (hesap parolan):",
+        parent, "Encryption key",
+        f"{address}\nKey passphrase (your account password):",
         QLineEdit.EchoMode.Password)
     if not ok or not pw:
         return None
@@ -640,15 +641,15 @@ def unlock_keys_prompt(cfg: Config, address: str, *, client: NetClient | None = 
     try:
         _secret, public, created = keys.unlock_or_create(address, pw)
     except crypto.CryptoError:
-        QMessageBox.warning(parent, "Şifreleme anahtarı",
-                            "Parola yanlış — şifreleme anahtarı açılmadı.")
+        QMessageBox.warning(parent, "Encryption key",
+                            "Wrong passphrase — encryption key not unlocked.")
         return None
     if client is not None:
         try:
             if created or client.pubkey_get(address) != public:
                 client.pubkey_set(public)
         except NetError:
-            pass  # yayınlanamadı — sonra tekrar denenir
+            pass  # could not publish — will retry later
     return keys
 
 
@@ -667,12 +668,12 @@ class LoginWindow(QWidget):
         self._identity_new = False
         self._identity_error = ""
         self._own_fingerprint = ""
-        self.setWindowTitle("Messager — Sunucuya bağlan")
+        self.setWindowTitle("Messager — Connect to server")
         self.resize(560, 420)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.addWidget(QLabel("Sunucuya bağlan", objectName="modalTitle"))
+        root.addWidget(QLabel("Connect to server", objectName="modalTitle"))
         box = QWidget(); root.addWidget(box, 1)
         v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
 
@@ -683,13 +684,13 @@ class LoginWindow(QWidget):
         self.e_socks_p = QLineEdit(str(cfg.sender.socks_port))
         self.e_psk = QLineEdit(cfg.client.preshared_key)
         self.e_psk.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Sunucu onion:", self.e_onion)
+        form.addRow("Server onion:", self.e_onion)
         form.addRow("Tor SOCKS host:", self.e_socks_h)
         form.addRow("Tor SOCKS port:", self.e_socks_p)
-        form.addRow("Ön-paylaşımlı anahtar:", self.e_psk)
+        form.addRow("Pre-shared key:", self.e_psk)
         v.addLayout(form)
 
-        b_test = QPushButton("Bağlantıyı test et")
+        b_test = QPushButton("Test connection")
         b_test.clicked.connect(self._test)
         v.addWidget(b_test)
 
@@ -701,11 +702,11 @@ class LoginWindow(QWidget):
         lt = QWidget(); lf = QFormLayout(lt)
         self.li_user = QLineEdit(); self.li_pass = QLineEdit()
         self.li_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        lf.addRow("Kullanıcı:", self.li_user)
-        lf.addRow("Şifre:", self.li_pass)
-        b_login = QPushButton("Giriş yap"); b_login.clicked.connect(self._login)
+        lf.addRow("Username:", self.li_user)
+        lf.addRow("Password:", self.li_pass)
+        b_login = QPushButton("Log in"); b_login.clicked.connect(self._login)
         lf.addRow(b_login)
-        self.tabs.addTab(lt, "Giriş")
+        self.tabs.addTab(lt, "Log in")
 
         # register tab
         rt = QWidget(); rf = QFormLayout(rt)
@@ -713,15 +714,15 @@ class LoginWindow(QWidget):
         self.re_inv = QLineEdit()
         self.re_p1.setEchoMode(QLineEdit.EchoMode.Password)
         self.re_p2.setEchoMode(QLineEdit.EchoMode.Password)
-        rf.addRow("Kullanıcı:", self.re_user)
-        rf.addRow("Şifre:", self.re_p1)
-        rf.addRow("Şifre (tekrar):", self.re_p2)
-        rf.addRow("Davet kodu:", self.re_inv)
-        b_reg = QPushButton("Kaydol"); b_reg.clicked.connect(self._register)
+        rf.addRow("Username:", self.re_user)
+        rf.addRow("Password:", self.re_p1)
+        rf.addRow("Password (again):", self.re_p2)
+        rf.addRow("Invite code:", self.re_inv)
+        b_reg = QPushButton("Register"); b_reg.clicked.connect(self._register)
         rf.addRow(b_reg)
-        self.tabs.addTab(rt, "Kaydol")
+        self.tabs.addTab(rt, "Register")
 
-        self.status = QLabel("Önce sunucu onion adresini gir ve bağlantıyı test et.")
+        self.status = QLabel("Enter the server onion address and test the connection first.")
         v.addWidget(self.status)
 
     def _mk_client(self) -> NetClient:
@@ -733,28 +734,28 @@ class LoginWindow(QWidget):
         )
 
     def _run(self, fn, on_ok):
-        self.status.setText("… çalışıyor")
+        self.status.setText("… working")
         self._w = _Worker(fn)
         self._w.ok.connect(on_ok)
-        self._w.fail.connect(lambda m: self.status.setText(f"hata: {m}"))
+        self._w.fail.connect(lambda m: self.status.setText(f"error: {m}"))
         self._w.start()
 
     def _test(self) -> None:
         if not self.e_onion.text().strip():
-            self.status.setText("onion adresi gerekli")
+            self.status.setText("onion address required")
             return
         self._client = self._mk_client()
         self._run(self._client.ping, self._tested)
 
     def _tested(self, pong: dict) -> None:
         self.tabs.setEnabled(True)
-        reg = "açık" if pong.get("open_registration") else "davet kodlu"
-        self.status.setText(f"bağlandı · sunucu {pong.get('onion','?')[:20]}… · kayıt: {reg}")
+        reg = "open" if pong.get("open_registration") else "invite-only"
+        self.status.setText(f"connected · server {pong.get('onion','?')[:20]}… · registration: {reg}")
 
     def _unlock_identity(self, address: str, password: str) -> None:
-        """Uçtan uca şifreleme kimliğini aç/oluştur ve gerekirse sunucuya
-        yayınla. Arka plan iş parçacığında çağrılır — sadece `self` üzerinde
-        veri tutar, UI'ye dokunmaz."""
+        """Unlock/create the end-to-end encryption identity and publish it to
+        the server if needed. Called on a background thread — only stores
+        data on `self`, does not touch the UI."""
         self._keys = None
         self._identity_new = False
         self._identity_error = ""
@@ -774,11 +775,11 @@ class LoginWindow(QWidget):
             if created or self._client.pubkey_get(address) != public:
                 self._client.pubkey_set(public)
         except NetError:
-            pass  # yayınlanamadı — bir sonraki girişte tekrar denenir
+            pass  # could not publish — will retry at next login
 
     def _login(self) -> None:
         if not self._client:
-            self.status.setText("önce bağlantıyı test et")
+            self.status.setText("test the connection first")
             return
         u, p = self.li_user.text().strip(), self.li_pass.text()
 
@@ -791,16 +792,16 @@ class LoginWindow(QWidget):
 
     def _register(self) -> None:
         if not self._client:
-            self.status.setText("önce bağlantıyı test et")
+            self.status.setText("test the connection first")
             return
         if self.re_p1.text() != self.re_p2.text():
-            self.status.setText("şifreler eşleşmiyor")
+            self.status.setText("passwords do not match")
             return
         u, p, inv = self.re_user.text().strip(), self.re_p1.text(), self.re_inv.text().strip()
         self._run(lambda: self._client.register(u, p, inv), lambda _r: self._registered(u))
 
     def _registered(self, user: str) -> None:
-        self.status.setText("kayıt tamam — şimdi giriş yap")
+        self.status.setText("registered — now log in")
         self.li_user.setText(user)
         self.tabs.setCurrentIndex(0)
 
@@ -813,18 +814,18 @@ class LoginWindow(QWidget):
         save_session(self.cfg, self._client)
         if self._identity_error:
             QMessageBox.warning(
-                self, "Uçtan uca şifreleme",
-                "Yerel şifreleme anahtarın açılamadı: " + self._identity_error +
-                "\n\nBu oturumda şifreli mesaj okuma/gönderme kapalı olacak. "
-                "Hesap parolan değiştiyse tekrar giriş yapmayı dene.")
+                self, "End-to-end encryption",
+                "Your local encryption key could not be unlocked: " + self._identity_error +
+                "\n\nReading/sending encrypted messages is off this session. "
+                "If your account password changed, try logging in again.")
         elif self._identity_new and self._keys:
             QMessageBox.information(
-                self, "Şifreleme anahtarın oluşturuldu",
-                "Bu cihaz için yeni bir uçtan uca şifreleme anahtarı oluşturuldu "
-                "ve sunucuya açık kısmı yayınlandı.\n\nParmak izin:\n"
+                self, "Encryption key created",
+                "A new end-to-end encryption key was created for this device "
+                "and its public part published to the server.\n\nYour fingerprint:\n"
                 f"{self._own_fingerprint}\n\n"
-                "İstersen bu parmak izini karşı tarafla ayrı bir kanaldan "
-                "(telefon, yüz yüze) karşılaştırıp doğrulayabilirsin.")
+                "If you like, compare this fingerprint with the other party over "
+                "a separate channel (phone, in person) to verify it.")
         self.logged_in.emit(self._client)
         self.close()
 
@@ -852,16 +853,16 @@ class SettingsDialog(QDialog):
         self.e_socks_p = QLineEdit(str(cfg.sender.socks_port))
         self.e_psk = QLineEdit(cfg.client.preshared_key)
         self.e_psk.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Hesap:", QLabel(backend.address or "(yerel)"))
-        form.addRow("Mod:", QLabel("uzak sunucu (Tor)" if net else "yerel Maildir"))
-        form.addRow("Sunucu onion:", self.e_onion)
+        form.addRow("Account:", QLabel(backend.address or "(local)"))
+        form.addRow("Mode:", QLabel("remote server (Tor)" if net else "local Maildir"))
+        form.addRow("Server onion:", self.e_onion)
         form.addRow("Tor SOCKS host:", self.e_socks_h)
         form.addRow("Tor SOCKS port:", self.e_socks_p)
-        form.addRow("Ön-paylaşımlı anahtar:", self.e_psk)
+        form.addRow("Pre-shared key:", self.e_psk)
 
         row = QHBoxLayout()
         if net:
-            b_out = QPushButton("Çıkış yap")
+            b_out = QPushButton("Log out")
             b_out.clicked.connect(self._logout)
             row.addWidget(b_out)
         row.addStretch(1)
@@ -871,7 +872,7 @@ class SettingsDialog(QDialog):
         bb.rejected.connect(self.reject)
         row.addWidget(bb)
         form.addRow(row)
-        self.note = QLabel("Değişiklikler bir sonraki açılışta geçerli olur.")
+        self.note = QLabel("Changes take effect at the next start.")
         form.addRow(self.note)
 
     def _save(self) -> None:
@@ -904,7 +905,7 @@ class KeysDialog(QDialog):
         self._cfg = cfg
         self._backend = backend
         self.keys: ClientKeys | None = getattr(backend, "keys", None)
-        self.setWindowTitle("Anahtarlar — uçtan uca şifreleme")
+        self.setWindowTitle("Keys — end-to-end encryption")
         self.resize(640, 460)
 
         lay = QVBoxLayout(self)
@@ -914,20 +915,20 @@ class KeysDialog(QDialog):
         v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
 
         if self.keys and self.keys.unlocked:
-            v.addWidget(QLabel(f"Kendi adresin: {self.keys.address}"))
-            v.addWidget(QLabel(f"Parmak izin: {crypto.fingerprint(self.keys.public)}"))
+            v.addWidget(QLabel(f"Your address: {self.keys.address}"))
+            v.addWidget(QLabel(f"Your fingerprint: {crypto.fingerprint(self.keys.public)}"))
         else:
             v.addWidget(QLabel(
-                "Bu oturumda uçtan uca şifreleme kimliği açık değil "
-                "(pyrage kurulu değil ya da giriş sırasında anahtar açılamadı)."))
+                "No end-to-end encryption identity is unlocked this session "
+                "(pyrage not installed, or the key could not be unlocked at login)."))
             if crypto.HAVE_AGE and getattr(backend, "address", ""):
-                b_unlock = QPushButton("Anahtarı aç…")
+                b_unlock = QPushButton("Unlock key…")
                 b_unlock.clicked.connect(self._unlock_now)
                 v.addWidget(b_unlock)
 
-        v.addWidget(QLabel("Bilinen eşler (TOFU):", objectName="fieldLabel"))
+        v.addWidget(QLabel("Known peers (TOFU):", objectName="fieldLabel"))
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Adres", "Parmak izi", "Doğrulanmış", "Kaynak"])
+        self.table.setHorizontalHeaderLabels(["Address", "Fingerprint", "Verified", "Source"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -935,17 +936,17 @@ class KeysDialog(QDialog):
         self._reload_table()
 
         row = QHBoxLayout()
-        b_add = QPushButton("Elle ekle / değişikliği kabul et")
+        b_add = QPushButton("Add manually / accept change")
         b_add.clicked.connect(self._add)
-        b_verify = QPushButton("Doğrulandı / değil işaretle")
+        b_verify = QPushButton("Toggle verified")
         b_verify.clicked.connect(self._toggle_verified)
-        b_forget = QPushButton("Unut")
+        b_forget = QPushButton("Forget")
         b_forget.clicked.connect(self._forget)
         for b in (b_add, b_verify, b_forget):
             b.setEnabled(self.keys is not None)
             row.addWidget(b)
         row.addStretch(1)
-        b_close = QPushButton("Kapat")
+        b_close = QPushButton("Close")
         b_close.clicked.connect(self.accept)
         row.addWidget(b_close)
         v.addLayout(row)
@@ -959,10 +960,10 @@ class KeysDialog(QDialog):
         self._backend.keys = keys
         self.keys = keys
         QMessageBox.information(
-            self, "Şifreleme anahtarı",
-            "Anahtar açıldı.\nParmak izin: "
+            self, "Encryption key",
+            "Key unlocked.\nYour fingerprint: "
             f"{crypto.fingerprint(keys.public)}\n\n"
-            "Bundan sonra açtığın mesaj pencerelerinde 🔒 kutusu aktif olur.")
+            "The 🔒 box is now active in message windows you open.")
         self.accept()
 
     def _reload_table(self) -> None:
@@ -973,7 +974,7 @@ class KeysDialog(QDialog):
             info = peers[addr]
             for c, val in enumerate((
                 addr, info.get("fingerprint", ""),
-                "evet" if info.get("verified") else "hayır", info.get("source", ""),
+                "yes" if info.get("verified") else "no", info.get("source", ""),
             )):
                 self.table.setItem(r, c, QTableWidgetItem(val))
         self.table.resizeColumnsToContents()
@@ -988,16 +989,16 @@ class KeysDialog(QDialog):
     def _add(self) -> None:
         if not self.keys:
             return
-        addr, ok = QInputDialog.getText(self, "Elle ekle", "Adres (kisi@<56 karakter>.onion):")
+        addr, ok = QInputDialog.getText(self, "Add manually", "Address (person@<56 chars>.onion):")
         if not ok or not addr.strip():
             return
-        pub, ok = QInputDialog.getText(self, "Elle ekle", "age açık anahtarı (age1…):")
+        pub, ok = QInputDialog.getText(self, "Add manually", "age public key (age1…):")
         if not ok or not pub.strip():
             return
         try:
             self.keys.set_peer(addr.strip().lower(), pub.strip(), verified=True, source="manual")
         except crypto.CryptoError as e:
-            QMessageBox.warning(self, "Geçersiz anahtar", str(e))
+            QMessageBox.warning(self, "Invalid key", str(e))
             return
         self._reload_table()
 
@@ -1014,7 +1015,7 @@ class KeysDialog(QDialog):
         if not addr or not self.keys:
             return
         yes = QMessageBox.question(
-            self, "Unut", f"{addr} için kayıtlı anahtar silinsin mi?",
+            self, "Forget", f"Delete the stored key for {addr}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if yes == QMessageBox.StandardButton.Yes:
@@ -1023,32 +1024,32 @@ class KeysDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
-#  Contacts — takma ad → onion adresi                                          #
+#  Contacts — nickname → onion address                                         #
 # --------------------------------------------------------------------------- #
 class ContactPickerDialog(QDialog):
-    """Compose penceresindeki 'Kişiler' düğmesi için: aranabilir, çift
-    tıklamayla seçilebilir küçük kişi listesi."""
+    """For the 'Contacts' button in the compose window: a small, searchable
+    contact list you can pick from with a double-click."""
 
     def __init__(self, contacts: Contacts, parent=None):
         super().__init__(parent)
         self.contacts = contacts
         self.chosen: str | None = None
-        self.setWindowTitle("Kişi seç")
+        self.setWindowTitle("Choose contact")
         self.resize(440, 380)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(QLabel("Kişi seç", objectName="modalTitle"))
+        lay.addWidget(QLabel("Choose contact", objectName="modalTitle"))
         box = QWidget(); lay.addWidget(box, 1)
         v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
 
         self.e_search = QLineEdit()
-        self.e_search.setPlaceholderText("ara…")
+        self.e_search.setPlaceholderText("search…")
         self.e_search.textChanged.connect(self._reload)
         v.addWidget(self.e_search)
 
         self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Takma ad", "Adres"])
+        self.table.setHorizontalHeaderLabels(["Nickname", "Address"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1057,8 +1058,8 @@ class ContactPickerDialog(QDialog):
 
         row = QHBoxLayout()
         row.addStretch(1)
-        b_ok = QPushButton("Seç"); b_ok.clicked.connect(self._accept_selected)
-        b_cancel = QPushButton("İptal"); b_cancel.clicked.connect(self.reject)
+        b_ok = QPushButton("Choose"); b_ok.clicked.connect(self._accept_selected)
+        b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
         row.addWidget(b_ok); row.addWidget(b_cancel)
         v.addLayout(row)
 
@@ -1091,22 +1092,22 @@ class ContactPickerDialog(QDialog):
 
 
 class ContactsDialog(QDialog):
-    """Menüdeki Contacts girişi: kişi defterini yönet (ekle/güncelle/sil)."""
+    """The Contacts menu entry: manage the contact book (add/update/delete)."""
 
     def __init__(self, contacts: Contacts, parent=None):
         super().__init__(parent)
         self.contacts = contacts
-        self.setWindowTitle("Kişiler")
+        self.setWindowTitle("Contacts")
         self.resize(640, 440)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(QLabel("Kişiler", objectName="modalTitle"))
+        lay.addWidget(QLabel("Contacts", objectName="modalTitle"))
         box = QWidget(); lay.addWidget(box, 1)
         v = QVBoxLayout(box); v.setContentsMargins(14, 12, 14, 12); v.setSpacing(8)
 
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Takma ad", "Adres", "Not"])
+        self.table.setHorizontalHeaderLabels(["Nickname", "Address", "Note"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1114,11 +1115,11 @@ class ContactsDialog(QDialog):
         self._reload()
 
         row = QHBoxLayout()
-        b_add = QPushButton("Ekle / güncelle"); b_add.clicked.connect(self._add)
-        b_del = QPushButton("Sil"); b_del.clicked.connect(self._remove)
+        b_add = QPushButton("Add / update"); b_add.clicked.connect(self._add)
+        b_del = QPushButton("Delete"); b_del.clicked.connect(self._remove)
         row.addWidget(b_add); row.addWidget(b_del)
         row.addStretch(1)
-        b_close = QPushButton("Kapat"); b_close.clicked.connect(self.accept)
+        b_close = QPushButton("Close"); b_close.clicked.connect(self.accept)
         row.addWidget(b_close)
         v.addLayout(row)
 
@@ -1138,17 +1139,17 @@ class ContactsDialog(QDialog):
         return it.text() if it else None
 
     def _add(self) -> None:
-        nick, ok = QInputDialog.getText(self, "Kişi ekle", "Takma ad:")
+        nick, ok = QInputDialog.getText(self, "Add contact", "Nickname:")
         if not ok or not nick.strip():
             return
-        addr, ok = QInputDialog.getText(self, "Kişi ekle", "Adres (kisi@<56 karakter>.onion):")
+        addr, ok = QInputDialog.getText(self, "Add contact", "Address (person@<56 chars>.onion):")
         if not ok or not addr.strip():
             return
-        note, ok = QInputDialog.getText(self, "Kişi ekle", "Not (opsiyonel):")
+        note, ok = QInputDialog.getText(self, "Add contact", "Note (optional):")
         try:
             self.contacts.add(nick, addr, note if ok else "")
         except ContactError as e:
-            QMessageBox.warning(self, "Geçersiz kişi", str(e))
+            QMessageBox.warning(self, "Invalid contact", str(e))
             return
         self._reload()
 
@@ -1157,7 +1158,7 @@ class ContactsDialog(QDialog):
         if not nick:
             return
         yes = QMessageBox.question(
-            self, "Sil", f"{nick} silinsin mi?",
+            self, "Delete", f"Delete {nick}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if yes == QMessageBox.StandardButton.Yes:
@@ -1166,15 +1167,15 @@ class ContactsDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
-#  Message view — her mesaj kendi penceresinde (ana listede önizleme yok)      #
+#  Message view — each message in its own window (no preview in the main list)  #
 # --------------------------------------------------------------------------- #
 class MessageWindow(QWidget):
-    """Tek bir mesajı kendi penceresinde gösterir (Who Am I mockup'ındaki gibi
-    ayrı pencere; ana liste artık alt panelde önizleme yapmıyor)."""
+    """Shows a single message in its own window (a separate window, like the
+    Who Am I mockup; the main list no longer previews in a bottom panel)."""
 
-    reply_requested = Signal(object)   # yanıtlanacak EmailMessage
-    needs_reload = Signal()            # silme sonrası ana liste yenilensin
-    mark_seen = Signal(str)            # açılan INBOX mesajının key'i
+    reply_requested = Signal(object)   # the EmailMessage to reply to
+    needs_reload = Signal()            # refresh the main list after a delete
+    mark_seen = Signal(str)            # key of the opened INBOX message
 
     def __init__(self, cfg: Config, backend: Backend, contacts: "Contacts | None",
                  folder: str, key: str, *, summary=None, warned_keys=None,
@@ -1186,7 +1187,7 @@ class MessageWindow(QWidget):
         self.folder = folder
         self.key = key
         self._raw = False
-        self._msg = None                   # son çözülen mesaj (yanıt için)
+        self._msg = None                   # last decoded message (for reply)
         self._warned_keys = warned_keys if warned_keys is not None else set()
         self._jobs: set = set()
 
@@ -1195,16 +1196,16 @@ class MessageWindow(QWidget):
             nm, ad = parseaddr(
                 (summary.to if folder in OUTGOING else summary.from_) or "")
             who = nm or ad
-        subj = (getattr(summary, "subject", "") or "") or "(konu yok)"
+        subj = (getattr(summary, "subject", "") or "") or "(no subject)"
         self.setWindowTitle(f"{subj} — {who}" if who else subj)
 
-        # Açılış boyutu: 120x35 karakterlik monospace ızgara (ana pencereyle
-        # aynı mantık; sonra serbestçe boyutlandırılabilir).
+        # Initial size: a 120x35 monospace character grid (same idea as the
+        # main window; freely resizable afterwards).
         _f = QFont("DejaVu Sans Mono")
-        _f.setPixelSize(13)              # QSS ile aynı
+        _f.setPixelSize(13)              # same as QSS
         _fm = QFontMetrics(_f)
-        self.resize(_fm.horizontalAdvance("M") * 120 + 18,   # + kenarlık / kaydırma
-                    _fm.height() * 35 + 76)                   # + başlık + düğme satırı
+        self.resize(_fm.horizontalAdvance("M") * 120 + 18,   # + border / scrollbar
+                    _fm.height() * 35 + 76)                   # + title + button row
 
         self.titlebar = QLabel(subj, objectName="titlebarText")
         tb = QWidget(objectName="titlebar")
@@ -1222,14 +1223,14 @@ class MessageWindow(QWidget):
         self.body = QPlainTextEdit()
         self.body.setReadOnly(True)
 
-        self.b_raw = QPushButton("Ham kaynak")
+        self.b_raw = QPushButton("Raw source")
         self.b_raw.setCheckable(True)
         self.b_raw.toggled.connect(self._toggle_raw)
-        b_reply = QPushButton("Yanıtla")
+        b_reply = QPushButton("Reply")
         b_reply.clicked.connect(self._reply)
-        b_del = QPushButton("Sil")
+        b_del = QPushButton("Delete")
         b_del.clicked.connect(self._delete)
-        b_close = QPushButton("Kapat")
+        b_close = QPushButton("Close")
         b_close.clicked.connect(self.close)
         row = QHBoxLayout()
         row.setContentsMargins(8, 6, 8, 8)
@@ -1257,7 +1258,7 @@ class MessageWindow(QWidget):
 
     # -- render -----------------------------------------------------
     def _load(self) -> None:
-        self.body.setPlainText("mesaj açılıyor…")
+        self.body.setPlainText("opening message…")
         self._set_attachments(None, [])
         folder, key, raw = self.folder, self.key, self._raw
 
@@ -1267,19 +1268,19 @@ class MessageWindow(QWidget):
             if warn:
                 addr, old_fp, new_fp = warn
                 QMessageBox.warning(
-                    self, "Anahtar değişti",
-                    f"{addr} adresinin uçtan uca şifreleme anahtarı değişti.\n\n"
-                    f"Eski parmak izi: {old_fp}\nYeni parmak izi: {new_fp}\n\n"
-                    "onionmail bu değişikliği otomatik kabul etmedi (eski anahtar "
-                    "kullanılmaya devam ediyor). Beklenmedik bir değişiklikse "
-                    "karşı tarafla ayrı bir kanaldan doğrula.")
+                    self, "Key changed",
+                    f"The end-to-end encryption key for {addr} has changed.\n\n"
+                    f"Old fingerprint: {old_fp}\nNew fingerprint: {new_fp}\n\n"
+                    "onionmail did not accept this change automatically (the old "
+                    "key keeps being used). If this change is unexpected, verify "
+                    "with the other party over a separate channel.")
             self.body.setPlainText(text)
             self._set_attachments(key, atts)
             if folder == "INBOX":
                 self.mark_seen.emit(key)
 
         def fail(m: str) -> None:
-            self.body.setPlainText(f"(mesaj alınamadı: {m})")
+            self.body.setPlainText(f"(could not fetch message: {m})")
 
         w = _Worker(lambda: self._render_body(folder, key, raw))
         w.ok.connect(done)
@@ -1289,9 +1290,9 @@ class MessageWindow(QWidget):
         w.start()
 
     def _render_body(self, folder: str, key: str, raw: bool):
-        """Ağ çağrısı yapar — arka planda çalışır. Döner:
-        (metin, [(index, dosya, boyut, tür, riskli), ...], anahtar-uyarısı|None,
-        çözülen EmailMessage|None)."""
+        """Makes a network call — runs in the background. Returns:
+        (text, [(index, file, size, type, risky), ...], key-warning|None,
+        decoded EmailMessage|None)."""
         if raw:
             return (self.backend.get_bytes(folder, key).decode("utf-8", "replace"),
                     [], None, None)
@@ -1304,17 +1305,17 @@ class MessageWindow(QWidget):
             sep = "\n" + "-" * 48 + "\n"
             own = self.backend.keys
             if not (own and own.unlocked):
-                return ("🔒 Şifreli mesaj — bu oturumda anahtar açık değil "
-                        "(çözmek için çıkış yapıp tekrar giriş yap)." + sep + head,
+                return ("🔒 Encrypted message — no key unlocked this session "
+                        "(log out and back in to decrypt)." + sep + head,
                         [], warn, None)
             try:
                 inner = decrypt_message(msg, own.secret)
             except crypto.CryptoError as e:
-                return (f"🔒 Şifreli mesaj — çözülemedi: {e}" + sep + head,
+                return (f"🔒 Encrypted message — could not decrypt: {e}" + sep + head,
                         [], warn, None)
             warn = warn or self._harvest_pubkey(inner)
             msg = inner
-            badge = "🔒 Şifreli mesaj (çözüldü)\n"
+            badge = "🔒 Encrypted message (decrypted)\n"
         head = "\n".join(f"{h}: {msg[h]}"
                          for h in ("From", "To", "Cc", "Subject", "Date") if msg[h])
         text = badge + head + "\n" + "-" * 48 + "\n" + safe_text(msg)
@@ -1356,11 +1357,11 @@ class MessageWindow(QWidget):
         if not key or not atts:
             self.att_bar.hide()
             return
-        self._att_lay.addWidget(QLabel("Ekler:"))
+        self._att_lay.addWidget(QLabel("Attachments:"))
         for ix, fn, size, ct, danger in atts:
             b = QPushButton(("[!] " if danger else "[EK] ") + fn)
             b.setToolTip(f"{ct} · {self._hsize(size)}"
-                         + ("  ·  riskli tür — dikkatli aç" if danger else ""))
+                         + ("  ·  risky type — open with care" if danger else ""))
             b.clicked.connect(
                 lambda _=False, k=key, i=ix, name=fn:
                 self._save_attachment(k, i, name))
@@ -1370,7 +1371,7 @@ class MessageWindow(QWidget):
 
     def _save_attachment(self, key: str, index: int, filename: str) -> None:
         start = str(Path.home() / filename)
-        dest, _ = QFileDialog.getSaveFileName(self, "Eki kaydet", start)
+        dest, _ = QFileDialog.getSaveFileName(self, "Save attachment", start)
         if not dest:
             return
         folder = self.folder
@@ -1391,13 +1392,13 @@ class MessageWindow(QWidget):
                         raise _Cancelled
                     tmp.replace(dest)
                     return dest
-            raise ValueError("ek parçası bulunamadı")
+            raise ValueError("attachment part not found")
 
-        ok = run_busy(self, "Dosya indiriliyor", work,
-                      ok_text="İndirme tamamlandı", err_text="İndirme başarısız")
+        ok = run_busy(self, "Downloading file", work,
+                      ok_text="Download complete", err_text="Download failed")
         tmp.unlink(missing_ok=True)
         if ok:
-            QMessageBox.information(self, "Kaydedildi", dest)
+            QMessageBox.information(self, "Saved", dest)
 
     # -- actions --------------------------------------------------
     def _toggle_raw(self, on: bool) -> None:
@@ -1409,7 +1410,7 @@ class MessageWindow(QWidget):
 
     def _delete(self) -> None:
         if QMessageBox.question(
-                self, "Sil", "Bu mesaj silinsin mi?",
+                self, "Delete", "Delete this message?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
@@ -1418,8 +1419,8 @@ class MessageWindow(QWidget):
         def work(is_cancelled, _status):
             self.backend.delete(folder, key)
 
-        if run_busy(self, "Mesaj siliniyor", work,
-                    ok_text="Mesaj silindi", err_text="Silme başarısız"):
+        if run_busy(self, "Deleting message", work,
+                    ok_text="Message deleted", err_text="Delete failed"):
             self.needs_reload.emit()
             self.close()
 
@@ -1428,7 +1429,7 @@ class MessageWindow(QWidget):
 #  Main window                                                                 #
 # --------------------------------------------------------------------------- #
 class MessagerWindow(QMainWindow):
-    auth_lost = Signal()   # sunucu oturumu reddetti (ör. sunucu yeniden başladı)
+    auth_lost = Signal()   # server rejected the session (e.g. server restarted)
 
     def __init__(self, cfg: Config, backend: Backend):
         super().__init__()
@@ -1444,20 +1445,20 @@ class MessagerWindow(QMainWindow):
         self._inbox_seeded = False
         self._flash_timer: QTimer | None = None
         self._chime_fx = None
-        # --- arka plan işleri (okundu işareti, otomatik yenileme) ---
-        self._render_jobs: set = set()      # canlı _Worker referansları (GC koruması)
-        self._auto_busy = False             # _auto_refresh list() zaten çalışıyor mu
-        self._warned_key_changes: set[str] = set()  # "adres:parmakizi" — bir kez uyar
-        self._filter = ""                   # mesaj listesi arama sorgusu (küçük harf)
-        self._qtxt = "?"                    # son bilinen kuyruk sayısı (filtre için önbellek)
+        # --- background jobs (seen mark, auto-refresh) ---
+        self._render_jobs: set = set()      # live _Worker references (GC guard)
+        self._auto_busy = False             # is _auto_refresh list() already running
+        self._warned_key_changes: set[str] = set()  # "address:fingerprint" — warn once
+        self._filter = ""                   # message-list search query (lowercase)
+        self._qtxt = "?"                    # last known queue count (cached for the filter)
 
-        # Açılış boyutu: 155x44 karakterlik monospace ızgara (sonra serbestçe
-        # küçültülüp büyütülebilir).
+        # Initial size: a 155x44 monospace character grid (freely resizable
+        # afterwards).
         _f = QFont("DejaVu Sans Mono")
-        _f.setPixelSize(13)               # QSS ile aynı
+        _f.setPixelSize(13)               # same as QSS
         _fm = QFontMetrics(_f)
-        _w = _fm.horizontalAdvance("M") * 155 + 22   # + kenarlık / kaydırma çubuğu
-        _h = _fm.height() * 44 + 52                   # + menü + durum çubuğu
+        _w = _fm.horizontalAdvance("M") * 155 + 22   # + border / scrollbar
+        _h = _fm.height() * 44 + 52                   # + menu + status bar
         self.resize(_w, _h)
         self._build_menu()
 
@@ -1479,12 +1480,12 @@ class MessagerWindow(QMainWindow):
             1, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 240)
 
-        # --- arama kutusu: başlık hizasında, sağ üstte küçük bir kutu ---
+        # --- search box: aligned with the title, a small box top-right ---
         self.search = QLineEdit()
-        self.search.setPlaceholderText("ara…")
+        self.search.setPlaceholderText("search…")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(260)
-        self.search.setToolTip("Kimden · kime · konu içinde ara  (Ctrl+F odak, Esc temizle)")
+        self.search.setToolTip("Search from · to · subject  (Ctrl+F focus, Esc clear)")
         self._search_debounce = QTimer(self)
         self._search_debounce.setSingleShot(True)
         self._search_debounce.setInterval(150)
@@ -1494,10 +1495,10 @@ class MessagerWindow(QMainWindow):
         _esc.setContext(Qt.ShortcutContext.WidgetShortcut)
         _esc.activated.connect(self._clear_filter)
 
-        # mesaja çift tık / Enter → ayrı pencerede aç (ana pencerede önizleme yok)
+        # double-click / Enter on a message → open in a separate window (no in-window preview)
         self.table.doubleClicked.connect(self._open_selected)
 
-        # üst çubuk: "Messager - KLASÖR" solda, arama kutusu sağda (ayrı satır yok)
+        # top bar: "Messager - FOLDER" on the left, search box on the right (no separate row)
         tb_row = QWidget()
         tb_row.setObjectName("titlebar")
         tbh = QHBoxLayout(tb_row)
@@ -1559,8 +1560,8 @@ class MessagerWindow(QMainWindow):
         return FOLDERS[self.folder_ix]
 
     def _on_auth_lost(self) -> None:
-        """Sunucu oturumu reddetti (ör. sunucu yeniden başladı) — oturumu
-        temizle, Giriş ekranına dön."""
+        """The server rejected the session (e.g. server restarted) — clear the
+        session, return to the Login screen."""
         if self._auth_dead:
             return
         self._auth_dead = True
@@ -1569,11 +1570,11 @@ class MessagerWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         clear_session(self.cfg)
-        self.status.showMessage("oturum sunucuda geçersiz — yeniden giriş gerekiyor")
+        self.status.showMessage("session invalid on the server — please log in again")
         QMessageBox.information(
-            self, "Oturum sona erdi",
-            "Sunucu oturumu kabul etmedi (sunucu yeniden başlamış olabilir).\n"
-            "Tekrar giriş yapın.")
+            self, "Session ended",
+            "The server did not accept the session (it may have restarted).\n"
+            "Please log in again.")
         self.auth_lost.emit()
 
     def reload(self, select: bool = True) -> None:
@@ -1589,10 +1590,10 @@ class MessagerWindow(QMainWindow):
             if "not authenticated" in str(e).lower():
                 self._on_auth_lost()
                 return
-            self.status.showMessage(f"liste alınamadı: {e}")
+            self.status.showMessage(f"could not fetch list: {e}")
             return
         except Exception as e:  # noqa: BLE001
-            self.status.showMessage(f"liste alınamadı: {e}")
+            self.status.showMessage(f"could not fetch list: {e}")
             return
         self.titlebar.setText(f"Messager - {self.folder}")
         self.setWindowTitle(f"Messager - {self.folder}")
@@ -1604,7 +1605,7 @@ class MessagerWindow(QMainWindow):
             self._inbox_seeded = True
 
     def _row_matches(self, s, outgoing: bool) -> bool:
-        """Arama sorgusu kimden/kime/konu (ve kayıtlı takma ad) içinde geçiyor mu."""
+        """Whether the search query occurs in from/to/subject (and a saved nickname)."""
         q = self._filter
         if not q:
             return True
@@ -1616,8 +1617,8 @@ class MessagerWindow(QMainWindow):
         return q in hay.lower()
 
     def _populate_table(self, *, select: bool, prev_key: str | None) -> None:
-        """`self._rows`'u (arama filtresi uygulanmış olarak) tabloya bas.
-        `reload()` ve arama kutusu buradan geçer."""
+        """Render `self._rows` into the table (with the search filter applied).
+        Both `reload()` and the search box go through here."""
         outgoing = self.folder in OUTGOING
         rows = [s for s in self._rows if self._row_matches(s, outgoing)]
         self.table.setRowCount(len(rows))
@@ -1629,12 +1630,12 @@ class MessagerWindow(QMainWindow):
             it0 = QTableWidgetItem(f"{mark}{who}")
             it0.setData(Qt.ItemDataRole.UserRole, s.key)
             self.table.setItem(r, 0, it0)
-            self.table.setItem(r, 1, QTableWidgetItem(s.subject or "(konu yok)"))
-        who = self.backend.address or "(yerel)"
+            self.table.setItem(r, 1, QTableWidgetItem(s.subject or "(no subject)"))
+        who = self.backend.address or "(local)"
         cnt = f"{len(rows)}/{len(self._rows)}" if self._filter else str(len(self._rows))
         self.status.showMessage(
             f"{who[:30]}   msgs:{cnt}   queue:{self._qtxt}   "
-            f"[{self.folder}]   N:new  R:reply  Ctrl+F:ara  D:sil  A:collector  ?:help"
+            f"[{self.folder}]   N:new  R:reply  Ctrl+F:search  D:del  A:collector  ?:help"
         )
         if not rows:
             pass
@@ -1668,7 +1669,7 @@ class MessagerWindow(QMainWindow):
         return it.data(Qt.ItemDataRole.UserRole) if it else None
 
     def _open_selected(self, *_) -> None:
-        """Seçili mesajı ayrı bir pencerede aç."""
+        """Open the selected message in a separate window."""
         key = self._selected_key()
         if not key:
             return
@@ -1697,7 +1698,7 @@ class MessagerWindow(QMainWindow):
         ))
 
     def _mark_seen_async(self, key: str) -> None:
-        """Okundu işaretini arka planda yolla; satırdaki » imini hemen kaldır."""
+        """Send the seen mark in the background; remove the row's » marker immediately."""
         for r in range(self.table.rowCount()):
             it = self.table.item(r, 0)
             if it and it.data(Qt.ItemDataRole.UserRole) == key:
@@ -1752,7 +1753,7 @@ class MessagerWindow(QMainWindow):
         if not rows:
             return
         white, black = QColor("#ffffff"), QColor("#000000")
-        state = {"n": 8}  # 4 kez yak + 4 kez söndür
+        state = {"n": 8}  # 4 times on + 4 times off
         if self._flash_timer is not None:
             self._flash_timer.stop()
         t = QTimer(self)
@@ -1865,7 +1866,7 @@ class MessagerWindow(QMainWindow):
             return
         if len(keys) > 1:
             yes = QMessageBox.question(
-                self, "Sil", f"{len(keys)} mesaj silinsin mi?  [{self.folder}]",
+                self, "Delete", f"Delete {len(keys)} messages?  [{self.folder}]",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -1881,7 +1882,7 @@ class MessagerWindow(QMainWindow):
             try:
                 for k in keys:
                     if is_cancelled():
-                        return          # iptal: o ana kadar silinenler kalır
+                        return          # cancel: whatever was deleted so far stays
                     self.backend.delete(folder, k)
                     result["n"] += 1
             except Exception:
@@ -1891,40 +1892,40 @@ class MessagerWindow(QMainWindow):
                 finished.set()
 
         ok = run_busy(
-            self, "Mesaj siliniyor" if one else f"{len(keys)} mesaj siliniyor", work,
-            ok_text="Mesaj silindi" if one else f"{len(keys)} mesaj silindi",
-            err_text="Silme başarısız")
-        # iptal anında worker hâlâ bir silmeyi bitiriyor olabilir; sayaç
-        # netleşsin diye kısaca bekle (diyalog zaten kapandı).
+            self, "Deleting message" if one else f"Deleting {len(keys)} messages", work,
+            ok_text="Message deleted" if one else f"{len(keys)} messages deleted",
+            err_text="Delete failed")
+        # at cancel time the worker may still be finishing a delete; wait
+        # briefly so the counter settles (the dialog is already closed).
         finished.wait(3.0)
 
         done_n = result["n"]
         if done_n:
             self.reload()
         if ok:
-            self.status.showMessage(f"{done_n} mesaj silindi  [{self.folder}]", 6000)
+            self.status.showMessage(f"{done_n} messages deleted  [{self.folder}]", 6000)
         elif result["err"]:
             self.status.showMessage(
-                f"{done_n}/{len(keys)} silindi, sonra hata  [{self.folder}]", 8000)
+                f"{done_n}/{len(keys)} deleted, then an error  [{self.folder}]", 8000)
         elif done_n:
             QMessageBox.information(
-                self, "Silme durduruldu",
-                f"{done_n}/{len(keys)} mesaj silindi, kalanı durduruldu.  "
+                self, "Delete stopped",
+                f"{done_n}/{len(keys)} messages deleted, the rest stopped.  "
                 f"[{self.folder}]")
 
     def _table_menu(self, pos) -> None:
         m = QMenu(self)
         sel = len(self._selected_keys())
-        a_open = m.addAction("Aç")
+        a_open = m.addAction("Open")
         a_open.setEnabled(sel == 1)
         m.addSeparator()
-        a_all = m.addAction("Tümünü seç")
-        a_clear = m.addAction("Seçimi temizle")
+        a_all = m.addAction("Select all")
+        a_clear = m.addAction("Clear selection")
         m.addSeparator()
-        a_contact = m.addAction("Göndereni kişiye ekle")
+        a_contact = m.addAction("Add sender to contacts")
         a_contact.setEnabled(sel == 1)
         m.addSeparator()
-        a_del = m.addAction(f"Seçileni sil ({sel})" if sel else "Seçileni sil")
+        a_del = m.addAction(f"Delete selected ({sel})" if sel else "Delete selected")
         a_del.setEnabled(sel > 0)
         chosen = m.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == a_open:
@@ -1945,17 +1946,17 @@ class MessagerWindow(QMainWindow):
         msg = self.backend.get(self.folder, key)
         addr = parseaddr(str(msg.get("From") or ""))[1].strip().lower()
         if not addr:
-            QMessageBox.warning(self, "Kişi ekle", "Gönderen adresi okunamadı.")
+            QMessageBox.warning(self, "Add contact", "Could not read the sender address.")
             return
         existing = self.contacts.find_by_address(addr)
         nick, ok = QInputDialog.getText(
-            self, "Kişiye ekle", f"{addr}\n\nTakma ad:", text=existing or "")
+            self, "Add to contacts", f"{addr}\n\nNickname:", text=existing or "")
         if not ok or not nick.strip():
             return
         try:
             self.contacts.add(nick, addr)
         except ContactError as e:
-            QMessageBox.warning(self, "Geçersiz kişi", str(e))
+            QMessageBox.warning(self, "Invalid contact", str(e))
 
     def act_collector(self) -> None:
         key = self._selected_key()
@@ -1974,36 +1975,36 @@ class MessagerWindow(QMainWindow):
         dlg.exec()
 
     def _on_logout(self) -> None:
-        QMessageBox.information(self, "Çıkış", "Oturum kapatıldı. Programı yeniden aç.")
+        QMessageBox.information(self, "Log out", "Session closed. Restart the program.")
         self.close()
 
     def act_help(self) -> None:
         QMessageBox.information(self, "Help", (
-            "Messager — kısayollar\n\n"
-            "Enter / çift tık  mesajı ayrı pencerede aç\n"
-            "N  yeni mesaj      R  yanıtla       D  sil\n"
-            "A  collector (sandbox)             G  yenile\n"
-            "Ctrl+Tab  sonraki klasör\n"
-            "Ctrl+F  aramaya odaklan (kimden/kime/konu)  Esc  aramayı temizle\n"
-            "F  gideni şimdi gönder (yerel mod)  ?  bu ekran   Ctrl+Q  çık\n\n"
-            "Mesaj penceresi: R yanıtla · X ham kaynak · Esc kapat\n"
-            "Menü: Email = yeni mesaj · Settings = sunucu/hesap · Help = bu ekran"
+            "Messager — shortcuts\n\n"
+            "Enter / double-click  open message in a separate window\n"
+            "N  new message     R  reply          D  delete\n"
+            "A  collector (sandbox)             G  refresh\n"
+            "Ctrl+Tab  next folder\n"
+            "Ctrl+F  focus search (from/to/subject)  Esc  clear search\n"
+            "F  send outbox now (local mode)  ?  this screen   Ctrl+Q  quit\n\n"
+            "Message window: R reply · X raw source · Esc close\n"
+            "Menu: Email = new message · Settings = server/account · Help = this screen"
         ))
 
     def act_flush(self) -> None:
         if not isinstance(self.backend, LocalBackend):
-            self.status.showMessage("uzak modda kuyruk sunucuda işleniyor", 4000)
+            self.status.showMessage("in remote mode the queue is processed on the server", 4000)
             return
         if self._worker and self._worker.isRunning():
             return
-        self.status.showMessage("Kuyruk işleniyor…")
+        self.status.showMessage("Processing queue…")
         from .sender import process_queue_once
         be = self.backend
         self._worker = _Worker(lambda: process_queue_once(self.cfg, be.store))
         self._worker.ok.connect(lambda n: (
-            self.status.showMessage(f"Kuyruk turu bitti ({n} giriş denendi)", 4000),
+            self.status.showMessage(f"Queue run finished ({n} entries tried)", 4000),
             self.reload()))
-        self._worker.fail.connect(lambda m: QMessageBox.warning(self, "Kuyruk hatası", m))
+        self._worker.fail.connect(lambda m: QMessageBox.warning(self, "Queue error", m))
         self._worker.start()
 
 
@@ -2036,8 +2037,9 @@ def run(cfg: Config, local: bool = False) -> None:
         win.auth_lost.connect(_relogin)
         win.show()
 
-    # --local: doğrudan Maildir. Aksi halde ağ modu: oturum varsa NetBackend,
-    # yoksa Giriş ekranı (sunucu onion'u boşsa kullanıcı orada elle girer).
+    # --local: Maildir directly. Otherwise network mode: NetBackend if a
+    # session exists, else the Login screen (if the server onion is empty the
+    # user enters it there by hand).
     if local:
         open_main(LocalBackend(cfg))
         sys.exit(app.exec())
@@ -2049,8 +2051,8 @@ def run(cfg: Config, local: bool = False) -> None:
         keys = unlock_keys_prompt(cfg, address, client=client)
         if keys is None and crypto.HAVE_AGE and address \
                 and (_client_config_dir(cfg) / "keys.json").is_file():
-            # şifreleme anahtarı var ama parola istemi iptal edildi / yanlıştı
-            # → posta kutusunu açma, çık
+            # an encryption key exists but the passphrase prompt was cancelled
+            # or wrong → do not open the mailbox
             sys.exit(0)
         open_main(NetBackend(client, keys=keys))
     else:

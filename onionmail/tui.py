@@ -77,22 +77,22 @@ Input > .input--cursor { background: white; color: black; }
 
 
 class HelpScreen(ModalScreen[None]):
-    BINDINGS = [Binding("escape,q,question_mark", "dismiss", "Kapat")]
+    BINDINGS = [Binding("escape,q,question_mark", "dismiss", "Close")]
     TEXT = (
-        "Messager — tuşlar\n\n"
-        "  ↑/↓ , j/k   mesajlar arası gezin\n"
-        "  Enter       mesajı oku\n"
-        "  n           yeni mesaj (New Message)\n"
-        "  r           yanıtla\n"
-        "  d           sil\n"
-        "  a           ekler / sandbox\n"
-        "  x           ham kaynak göster/gizle\n"
-        "  Tab         sonraki klasör (INBOX/Sent/Outbox/Failed/Drafts)\n"
-        "  f           giden kuyruğu şimdi işle (Replication)\n"
-        "  g           yenile\n"
-        "  q           çık\n\n"
-        "Menü çubuğu tıklanabilir: Email=yeni  Home=INBOX  Replication=kuyruk\n"
-        "Navigator=klasör  Collector=sandbox  Widgets=ham  Help=bu ekran"
+        "Messager — keys\n\n"
+        "  ↑/↓ , j/k   move between messages\n"
+        "  Enter       read message\n"
+        "  n           new message (New Message)\n"
+        "  r           reply\n"
+        "  d           delete\n"
+        "  a           attachments / sandbox\n"
+        "  x           show/hide raw source\n"
+        "  Tab         next folder (INBOX/Sent/Outbox/Failed/Drafts)\n"
+        "  f           process the outbox now (Replication)\n"
+        "  g           refresh\n"
+        "  q           quit\n\n"
+        "The menu bar is clickable: Email=new  Home=INBOX  Replication=queue\n"
+        "Navigator=folder  Collector=sandbox  Widgets=raw  Help=this screen"
     )
 
     def compose(self) -> ComposeResult:
@@ -106,8 +106,8 @@ class HelpScreen(ModalScreen[None]):
 
 class ComposeScreen(ModalScreen[bool]):
     BINDINGS = [
-        Binding("escape", "cancel", "İptal"),
-        Binding("ctrl+s", "send", "Gönder"),
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "send", "Send"),
     ]
 
     def __init__(self, cfg: Config, store: Store, *, to: str = "", cc: str = "",
@@ -128,18 +128,18 @@ class ComposeScreen(ModalScreen[bool]):
                     yield Input(self._v["subject"], id="c-subject")
                 with Vertical():
                     yield Label("CC:", classes="field-label")
-                    yield Input(self._v["cc"], id="c-cc", placeholder="ad@<onion>, ...")
+                    yield Input(self._v["cc"], id="c-cc", placeholder="name@<onion>, ...")
                 with Vertical():
                     yield Label("To:", classes="field-label")
-                    yield Input(self._v["to"], id="c-to", placeholder="alıcı@<56 krktr>.onion")
+                    yield Input(self._v["to"], id="c-to", placeholder="recipient@<56 chars>.onion")
                 with Vertical():
                     yield Label("BCC:", classes="field-label")
-                    yield Input(self._v["bcc"], id="c-bcc", placeholder="gizli@<onion>, ...")
+                    yield Input(self._v["bcc"], id="c-bcc", placeholder="bcc@<onion>, ...")
             yield Static(f"From:  {self.cfg.identity.local_user}@{onion}", id="compose-from")
-            yield Input("", id="c-attach", placeholder="Attachments:  /yol/dosya1, /yol/dosya2")
+            yield Input("", id="c-attach", placeholder="Attachments:  /path/file1, /path/file2")
             yield Label("Message:", classes="field-label")
             yield TextArea(self._v["body"], id="compose-msg")
-            yield Static("Ctrl+S: gönder   ·   Esc: iptal", id="compose-err")
+            yield Static("Ctrl+S: send   ·   Esc: cancel", id="compose-err")
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -149,18 +149,18 @@ class ComposeScreen(ModalScreen[bool]):
         err = self.query_one("#compose-err", Static)
         to = g("c-to")
         if not to:
-            err.update("alıcı gerekli (BCC alanının üstündeki satır)")
+            err.update("recipient required (the row above the BCC field)")
             return
         attach = [Path(p.strip()) for p in g("c-attach").split(",") if p.strip()]
         missing = [str(p) for p in attach if not p.is_file()]
         if missing:
-            err.update("dosya yok: " + ", ".join(missing))
+            err.update("file not found: " + ", ".join(missing))
             return
         try:
             msg = build_message(
                 self.cfg,
                 to=to, cc=g("c-cc"),
-                subject=g("c-subject") or "(konu yok)",
+                subject=g("c-subject") or "(no subject)",
                 body=self.query_one("#compose-msg", TextArea).text,
                 attachments=attach,
                 in_reply_to=self._in_reply_to,
@@ -171,14 +171,14 @@ class ComposeScreen(ModalScreen[bool]):
         except Exception as e:  # noqa: BLE001
             err.update(str(e))
             return
-        self.app.notify("Kuyruğa alındı")
+        self.app.notify("Queued")
         self.dismiss(True)
 
 
 class TextViewScreen(ModalScreen[None]):
-    BINDINGS = [Binding("escape,q", "dismiss", "Kapat")]
+    BINDINGS = [Binding("escape,q", "dismiss", "Close")]
 
-    def __init__(self, text: str, title: str = "Kaynak"):
+    def __init__(self, text: str, title: str = "Source"):
         super().__init__()
         self._text, self._title = text, title
 
@@ -193,8 +193,8 @@ class TextViewScreen(ModalScreen[None]):
 
 class SandboxScreen(ModalScreen[None]):
     BINDINGS = [
-        Binding("escape,q", "dismiss", "Kapat"),
-        Binding("s", "safe_text", "Güvenli metin"),
+        Binding("escape,q", "dismiss", "Close"),
+        Binding("s", "safe_text", "Safe text"),
     ]
 
     def __init__(self, cfg: Config, store: Store, folder: str, key: str):
@@ -204,21 +204,21 @@ class SandboxScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         msg = self.store.get(self.folder, self.key)
         with Vertical(id="sandbox-box", classes="modal"):
-            yield Static("Collector — ek / parça incelemesi", classes="modal-title")
+            yield Static("Collector — attachment / part review", classes="modal-title")
             avail = backend_available(self.cfg)
             yield Static(
                 f"backend: {self.cfg.sandbox.backend} "
-                + ("[hazır — 'net yok' izole açma]" if avail
-                   else "[yok — sadece güvenli metin / diske çıkarma]")
+                + ("[ready — isolated 'no network' open]" if avail
+                   else "[unavailable — safe text / extract to disk only]")
             )
             table = DataTable(id="parts", cursor_type="row")
-            table.add_columns("#", "tür", "dosya", "boyut", "risk")
+            table.add_columns("#", "type", "file", "size", "risk")
             for p in list_parts(msg):
                 table.add_row(str(p.index), p.content_type, p.filename,
-                              f"{p.size}", "YÜKSEK" if p.dangerous else "-",
+                              f"{p.size}", "HIGH" if p.dangerous else "-",
                               key=str(p.index))
             yield table
-            yield Static("Enter: seçili parçayı izole ortamda aç   ·   s: güvenli metin   ·   Esc: kapat",
+            yield Static("Enter: open the selected part in an isolated environment   ·   s: safe text   ·   Esc: close",
                          id="sandbox-hint")
 
     def action_dismiss(self) -> None:  # type: ignore[override]
@@ -226,7 +226,7 @@ class SandboxScreen(ModalScreen[None]):
 
     def action_safe_text(self) -> None:
         msg = self.store.get(self.folder, self.key)
-        self.app.push_screen(TextViewScreen(safe_text(msg), "Güvenli metin (nötrlenmiş)"))
+        self.app.push_screen(TextViewScreen(safe_text(msg), "Safe text (neutralised)"))
 
     @on(DataTable.RowSelected, "#parts")
     def _open_part(self, event: DataTable.RowSelected) -> None:
@@ -236,26 +236,26 @@ class SandboxScreen(ModalScreen[None]):
         path = extract_part(msg, index, dest)
         proc = open_attachment(path, self.cfg)
         if proc is None:
-            self.app.notify(f"Sandbox backend yok; diske çıkarıldı:\n{path}",
+            self.app.notify(f"No sandbox backend; extracted to disk:\n{path}",
                             severity="warning", timeout=6)
         else:
-            self.app.notify(f"İzole ortamda açıldı (ağ yok): {path.name}")
+            self.app.notify(f"Opened in an isolated environment (no network): {path.name}")
 
 
 class OnionMailApp(App):
     CSS = MONO_CSS
     TITLE = "Messager"
     BINDINGS = [
-        Binding("q", "quit", "Çık"),
-        Binding("n", "compose", "Yeni"),
-        Binding("r", "reply", "Yanıtla"),
-        Binding("d", "delete", "Sil"),
-        Binding("a", "sandbox", "Ekler"),
-        Binding("x", "toggle_raw", "Ham"),
-        Binding("tab", "next_folder", "Klasör"),
+        Binding("q", "quit", "Quit"),
+        Binding("n", "compose", "New"),
+        Binding("r", "reply", "Reply"),
+        Binding("d", "delete", "Delete"),
+        Binding("a", "sandbox", "Attach"),
+        Binding("x", "toggle_raw", "Raw"),
+        Binding("tab", "next_folder", "Folder"),
         Binding("f", "flush_queue", "Replication"),
-        Binding("g", "refresh", "Yenile"),
-        Binding("question_mark", "help", "Yardım"),
+        Binding("g", "refresh", "Refresh"),
+        Binding("question_mark", "help", "Help"),
         Binding("j", "cursor_down", "", show=False),
         Binding("k", "cursor_up", "", show=False),
     ]
@@ -298,7 +298,7 @@ class OnionMailApp(App):
             name, addr = parseaddr(raw)
             who = name or (addr.split("@")[0] if "@" in addr else addr) or raw
             mark = "" if s.seen else "» "
-            subj = (s.subject or "(konu yok)")[:62]
+            subj = (s.subject or "(no subject)")[:62]
             t.add_row(f"{mark}{who}"[:24], f"│ {subj}", key=s.key)
         q = self.store.queue()
         onion = self.cfg.identity.resolve_onion() or "(onion?)"
@@ -413,7 +413,7 @@ class OnionMailApp(App):
             self.push_screen(SandboxScreen(self.cfg, self.store, self.folder, key))
 
     def action_flush_queue(self) -> None:
-        self.notify("Kuyruk işleniyor…")
+        self.notify("Processing queue…")
         self.run_worker(self._flush, thread=True, exclusive=True)
 
     def _flush(self) -> None:
@@ -421,7 +421,7 @@ class OnionMailApp(App):
 
         try:
             n = process_queue_once(self.cfg, self.store)
-            self.call_from_thread(self.notify, f"Kuyruk turu bitti ({n} giriş denendi)")
+            self.call_from_thread(self.notify, f"Queue run finished ({n} entries tried)")
         except Exception as e:  # noqa: BLE001
-            self.call_from_thread(self.notify, f"Kuyruk hatası: {e}", severity="error")
+            self.call_from_thread(self.notify, f"Queue error: {e}", severity="error")
         self.call_from_thread(self._reload)

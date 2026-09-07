@@ -45,7 +45,7 @@ class _Server(socketserver.ThreadingTCPServer):
         self._sfile = cfg.accounts.store_path_p / "sessions.json"
         self._load_sessions()
 
-    # session persistence (apid yeniden başlasa/sunucu reboot olsa da jeton kalsın)
+    # session persistence (token survives an apid restart / server reboot)
     def _load_sessions(self) -> None:
         try:
             raw = json.loads(self._sfile.read_text())
@@ -58,7 +58,7 @@ class _Server(socketserver.ThreadingTCPServer):
         }
 
     def _save_sessions(self) -> None:
-        """`_slock` tutulurken çağrılır."""
+        """Called while `_slock` is held."""
         try:
             self._sfile.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._sfile.parent / (self._sfile.name + ".tmp")
@@ -66,7 +66,7 @@ class _Server(socketserver.ThreadingTCPServer):
             os.chmod(tmp, 0o600)
             tmp.replace(self._sfile)
         except OSError as e:  # noqa: BLE001
-            log.warning("oturum dosyası yazılamadı: %s", e)
+            log.warning("could not write session file: %s", e)
 
     # session helpers ---------------------------------------------------
     def new_session(self, user: str) -> tuple[str, float]:
@@ -164,7 +164,7 @@ class _Handler(socketserver.StreamRequestHandler):
             return P.err(str(e))
         if not good:
             time.sleep(0.5)
-            return P.err("kullanıcı adı veya şifre hatalı")
+            return P.err("wrong username or password")
         token, exp = self.srv.new_session(user.strip().lower())
         onion = self.srv.onion
         return P.ok(token=token, expires=int(exp),
@@ -206,7 +206,7 @@ class _Handler(socketserver.StreamRequestHandler):
                 rcpts = recipients_of(msg)  # type: ignore[arg-type]
             bad = [r for r in rcpts if not is_onion_address(r)]
             if bad:
-                return P.err("alıcı(lar) .onion değil: " + ", ".join(bad))
+                return P.err("recipient(s) are not .onion: " + ", ".join(bad))
             store.enqueue(raw, f"{user}@{self.srv.onion}", rcpts)
             return P.ok(queued=len(rcpts))
 
@@ -225,7 +225,7 @@ class _Handler(socketserver.StreamRequestHandler):
         if op == P.OP_PUBKEY_SET:
             pk = str(req.get("public", "")).strip()
             if not pk.startswith("age1"):
-                return P.err("geçersiz age açık anahtarı")
+                return P.err("invalid age public key")
             self.srv.accounts.set_pubkey(user, pk)
             return P.ok()
 
@@ -233,7 +233,7 @@ class _Handler(socketserver.StreamRequestHandler):
             addr = str(req.get("address", "")).strip().lower()
             localpart, _, dom = addr.partition("@")
             if dom and self.srv.onion and dom != self.srv.onion:
-                return P.ok(public=None)  # başka sunucu — bu apid yalnızca kendi hesaplarını bilir
+                return P.ok(public=None)  # another server — this apid only knows its own accounts
             return P.ok(public=self.srv.accounts.get_pubkey(localpart or addr))
 
         return P.err(f"unhandled op: {op}")

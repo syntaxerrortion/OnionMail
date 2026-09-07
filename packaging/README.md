@@ -1,83 +1,84 @@
-# onionmail istemcisini paketleme (Windows / macOS / Linux `.exe`)
+# Packaging the onionmail client (Windows / macOS / Linux `.exe`)
 
-Amaç: arkadaşlar **Python / Tor kurmadan** çift tıklayıp bağlansın.
+Goal: friends double-click and connect **without installing Python / Tor**.
 
-## Ne üretilir
+## What is produced
 
-`dist/onionmail/` klasörü (onedir) → zip'lenip dağıtılır. İçinde:
+A `dist/onionmail/` folder (onedir) → zipped and distributed. It contains:
 
-- `onionmail(.exe)` — `packaging/launcher.py`'den PyInstaller ile
-- `tor/tor(.exe)` — Tor Expert Bundle'dan; uygulama açılışta kendi Tor'unu
-  başlatır (`SocksPort 9250`, kendi `DataDirectory`'si)
+- `onionmail(.exe)` — built from `packaging/launcher.py` with PyInstaller
+- `tor/tor(.exe)` — from the Tor Expert Bundle; the app starts its own Tor on
+  launch (`SocksPort 9250`, its own `DataDirectory`)
 
-Sunucu onion'u **pakete gömülmez**. Kullanıcı deneyimi: exe'yi çalıştır →
-Tor bootstrap (~10-30 sn) → **Giriş ekranı** → sunucu onion adresi + Tor
-SOCKS (önceden dolu) → "Bağlantıyı test et" → davet kodu + kullanıcı adı +
-şifre → posta kutusu. Onion ve oturum `~/.config/onionmail/`'da hatırlanır,
-sonraki açılışlarda doğrudan kutu gelir.
+The server onion is **not embedded** in the package. User experience: run the
+exe → Tor bootstrap (~10-30 s) → **Login screen** → server onion address + Tor
+SOCKS (pre-filled) → "Test connection" → invite code + username + password →
+mailbox. The onion and the session are remembered in `~/.config/onionmail/`, so
+later launches go straight to the mailbox.
 
-## GitHub Actions (önerilen — çok-OS otomatik)
+## GitHub Actions (recommended — multi-OS, automatic)
 
-1. Bu depoyu GitHub'a it (aşağıda "Depoyu oluştur").
-2. Bir sürüm etiketi at:
+1. Push this repo to GitHub (see "Create the repo" below).
+2. Push a version tag:
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
-3. Actions çalışır; Windows/macOS/Linux zip'leri hem **artifact** hem de
-   **Release** eki olarak yüklenir. `workflow_dispatch` ile elle de tetiklenir.
+3. Actions runs; Windows/macOS/Linux zips are uploaded both as **artifacts** and
+   as **Release** assets. Can also be triggered manually with
+   `workflow_dispatch`.
 
-Arkadaşına: zip'i indir → aç → `onionmail(.exe)` çalıştır → Giriş ekranında
-**sunucu onion adresini** ve davet kodunu gir.
+For your friend: download the zip → extract → run `onionmail(.exe)` → on the
+Login screen enter the **server onion address** and the invite code.
 
-Tor sürümü `.github/workflows/build.yml` içinde sabit (`V=14.0.1`) — Tor Expert
-Bundle güncellendikçe orayı yükselt.
+The Tor version is pinned in `.github/workflows/build.yml` (`V=14.0.1`) — bump
+it there as the Tor Expert Bundle is updated.
 
-## Elle derleme (tek OS)
+## Manual build (single OS)
 
-Hedef OS'un kendisinde çalıştır (Windows exe'si Windows'ta derlenir):
+Run it on the target OS itself (a Windows exe is built on Windows):
 
 ```bash
 python -m venv .venv && . .venv/bin/activate      # win: .venv\Scripts\activate
 pip install pyinstaller PySide6 PySocks argon2-cffi aiosmtpd textual
 pip install -e .
 
-# Tor Expert Bundle'ı indir, aç, tor/ klasörüne koy:
+# Download the Tor Expert Bundle, extract it, put it in the tor/ folder:
 #   https://www.torproject.org/download/tor/  -> "Expert Bundle"
-#   tor/tor(.exe) olacak şekilde
+#   so that tor/tor(.exe) exists
 
 TOR_DIR=tor pyinstaller --noconfirm packaging/onionmail.spec
-# çıktı: dist/onionmail/
+# output: dist/onionmail/
 ```
 
-## İmzalama / SmartScreen / antivirüs
+## Signing / SmartScreen / antivirus
 
-- İmzasız exe'de Windows **SmartScreen** ("Daha fazla bilgi → Yine de çalıştır")
-  ve macOS **Gatekeeper** (sağ tık → Aç) uyarısı çıkar. Normal.
-- PyInstaller onedir, `--onefile`'a göre antivirüs yanlış-pozitifi daha az verir.
-- Gerçek imza istiyorsan: Windows için Authenticode sertifikası (ücretli),
-  macOS için Apple Developer ID + notarization.
+- An unsigned exe triggers Windows **SmartScreen** ("More info → Run anyway")
+  and macOS **Gatekeeper** (right-click → Open) warnings. Normal.
+- PyInstaller onedir produces fewer antivirus false positives than `--onefile`.
+- If you want a real signature: an Authenticode certificate for Windows (paid),
+  an Apple Developer ID + notarization for macOS.
 
-## Depoyu oluştur (gh CLI yoksa)
+## Create the repo (without the gh CLI)
 
 ```bash
 cd ~/onionmail
 git init && git add -A && git commit -m "onionmail + packaging"
 git branch -M main
-# GitHub'da web'den boş bir repo aç (README ekleme), sonra:
-git remote add origin git@github.com:<kullanıcı>/onionmail.git
+# Create an empty repo on the GitHub website (no README), then:
+git remote add origin git@github.com:<user>/onionmail.git
 git push -u origin main
 ```
 
-> Depo herkese açıksa: kod açığa çıkar (sır yok — onion adresi ve davet
-> kodları kodda değil). Yine de istemiyorsan **private** repo + Actions yine
-> çalışır (kişisel hesapta private için aylık ücretsiz dakika sınırı var ama
-> bu iş için fazlasıyla yeter).
+> If the repo is public: the code is exposed (no secrets — the onion address and
+> invite codes are not in the code). If you still don't want that, a **private**
+> repo works with Actions too (a personal account has a monthly free-minutes
+> limit for private repos, but it is more than enough for this).
 
-## Notlar
+## Notes
 
-- `launcher.py` gömülü tor yoksa: açık bir `127.0.0.1:9250`'yi, sonra Tor
-  Browser'ın `9150`'sini dener.
-- `sandbox.backend` Windows/macOS'ta pratikte `none` — ekler yalnız diske
-  çıkarılır (firejail/bwrap yok). İzole açma Linux'a özgü.
-- roomcam-view bu pakete dahil değil (ayrı araç).
+- If there is no bundled tor, `launcher.py` tries an open `127.0.0.1:9250`, then
+  Tor Browser's `9150`.
+- `sandbox.backend` is effectively `none` on Windows/macOS — attachments are
+  only extracted to disk (no firejail/bwrap). Isolated opening is Linux-only.
+- roomcam-view is not part of this package (separate tool).

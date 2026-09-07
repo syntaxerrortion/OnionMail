@@ -56,33 +56,33 @@ def test_inbound_delivery(cfg: Config):
             msg = EmailMessage()
             msg["From"] = f"someone@{PEER}"
             msg["To"] = f"me@{ONION}"
-            msg["Subject"] = "merhaba"
-            msg.set_content("gövde")
+            msg["Subject"] = "hello"
+            msg.set_content("body")
             s.send_message(msg)
     finally:
         controller.stop()
 
     inbox = store.list("INBOX")
     assert len(inbox) == 1
-    assert inbox[0].subject == "merhaba"
+    assert inbox[0].subject == "hello"
     assert "onion-SMTP" in store.get_bytes("INBOX", inbox[0].key).decode()
 
 
 def test_list_decodes_non_ascii_subject(cfg: Config):
-    """`mailbox.Maildir` mesajları compat32 policy'siyle ayrıştırıyor —
-    `store.list()` RFC 2047 encoded-word (ör. Türkçe karakterli Subject)
-    başlıklarını kendisi çözmeli, ham '=?utf-8?...?=' göstermemeli."""
+    """`mailbox.Maildir` parses messages with the compat32 policy —
+    `store.list()` must decode RFC 2047 encoded-word headers itself (e.g. a
+    Subject with non-ASCII characters), not show raw '=?utf-8?...?='."""
     store = Store(cfg.storage.maildir_path)
     msg = EmailMessage()
     msg["From"] = f"someone@{PEER}"
     msg["To"] = f"me@{ONION}"
-    msg["Subject"] = "[şifreli mesaj]"
-    msg.set_content("gövde")
+    msg["Subject"] = "[encrypted message]"
+    msg.set_content("body")
     store.add_incoming(msg.as_bytes())
 
     inbox = store.list("INBOX")
     assert len(inbox) == 1
-    assert inbox[0].subject == "[şifreli mesaj]"
+    assert inbox[0].subject == "[encrypted message]"
 
 
 def test_relay_is_refused(cfg: Config):
@@ -143,8 +143,8 @@ def test_queue_retries_on_transient_failure(cfg: Config, monkeypatch):
 
 
 def test_multiuser_send_lands_in_account_queue(cfg: Config, tmp_path: Path, monkeypatch):
-    """Çok kullanıcılı modda CLI `send`, çalışan sender'ın taradığı HESAP
-    kuyruğuna yazmalı — tek-Maildir kuyruğuna değil (eski bug)."""
+    """In multi-user mode, CLI `send` must write to the ACCOUNT queue that the
+    running sender scans — not the single-Maildir queue (old bug)."""
     from onionmail import sender
     from onionmail.__main__ import _resolve_account
     from onionmail.accounts import Accounts, Policy
@@ -165,8 +165,8 @@ def test_multiuser_send_lands_in_account_queue(cfg: Config, tmp_path: Path, monk
     assert str(msg["From"]) == f"me@{ONION}"
     queue_message(cfg, store, msg)
 
-    assert len(Store(cfg.storage.maildir_path).queue()) == 0   # tek-Maildir boş
-    assert len(store.queue()) == 1                             # hesap kuyruğunda
+    assert len(Store(cfg.storage.maildir_path).queue()) == 0   # single Maildir empty
+    assert len(store.queue()) == 1                             # in the account queue
 
     stores = sender._stores(cfg)
     assert any(s.root_path == store.root_path for s in stores)
@@ -183,8 +183,8 @@ def test_multiuser_send_lands_in_account_queue(cfg: Config, tmp_path: Path, monk
 
 
 def test_encrypted_queue_hides_body_and_bcc(cfg: Config):
-    """queue_message(encrypt_to=...) kuyruğa şifreli zarf koyar; gövde de BCC de
-    (şifreli parçanın içinde bile) sızmaz."""
+    """queue_message(encrypt_to=...) puts an encrypted envelope in the queue;
+    neither the body nor the BCC leaks (not even inside the encrypted part)."""
     pytest.importorskip("pyrage")
     from onionmail import crypto
     from onionmail.compose import (
@@ -195,7 +195,7 @@ def test_encrypted_queue_hides_body_and_bcc(cfg: Config):
     a_sec, a_pub = crypto.generate_identity()
     _, b_pub = crypto.generate_identity()
 
-    inner = build_message(cfg, to=[f"to@{PEER}"], subject="özel", body="gizli metin")
+    inner = build_message(cfg, to=[f"to@{PEER}"], subject="private", body="secret text")
     queue_message(cfg, store, inner, bcc=[f"hidden@{PEER}"], encrypt_to=[a_pub, b_pub])
 
     q = store.queue()
@@ -205,11 +205,11 @@ def test_encrypted_queue_hides_body_and_bcc(cfg: Config):
     key = store.list("Outbox")[0].key
     raw = store.get_bytes("Outbox", key)
     assert b"hidden@" not in raw
-    assert "gizli metin".encode() not in raw
+    assert "secret text".encode() not in raw
     assert is_encrypted(store.get("Outbox", key))
 
     back = decrypt_message(store.get("Outbox", key), a_sec)
-    assert back["Subject"] == "özel"
+    assert back["Subject"] == "private"
     assert back["Bcc"] is None
     assert back["To"] == f"to@{PEER}"
 
@@ -222,7 +222,7 @@ def test_sandbox_parts_and_html(cfg: Config):
 
     msg = EmailMessage()
     msg["Subject"] = "s"
-    msg.set_content("düz metin")
+    msg.set_content("plain text")
     msg.add_alternative(
         "<p>selam<script>steal()</script><img src='http://evil/x'></p>", subtype="html"
     )
@@ -234,5 +234,5 @@ def test_sandbox_parts_and_html(cfg: Config):
     assert exe.dangerous is True
 
     txt = safe_text(msg)
-    assert "düz metin" in txt          # prefers text/plain
+    assert "plain text" in txt          # prefers text/plain
     assert "script" not in txt.lower() or "steal" not in txt

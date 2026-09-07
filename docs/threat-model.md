@@ -1,42 +1,47 @@
-# Tehdit modeli ve sınırlar
+# Threat model and limits
 
-## Ne sağlar
+## What it provides
 
-* **Sunucu konumu gizli.** Onion service, sunucunun IP'sini/coğrafi konumunu
-  açığa çıkarmaz. Router port yönlendirmesi gerekmez.
-* **Taşımada şifreleme.** Onion-to-onion trafiği Tor tarafından uçtan uca
-  şifrelenir; STARTTLS olmadan da SMTP konuşması ağda düz görünmez.
-* **Kapalı ağ.** Sunucu yalnızca kendi adresine gelen maili kabul eder
-  (`relay denied`). Açık relay değil.
-* **Politika allowlist'i.** `policy.allowlist_only = true` ile yalnızca bilinen
-  onion adreslerinden mail alınır — rastgele onion spam'i engellenir.
+* **Server location hidden.** The onion service does not reveal the server's
+  IP / geographic location. No router port forwarding needed.
+* **Encryption in transit.** Onion-to-onion traffic is end-to-end encrypted by
+  Tor; even without STARTTLS the SMTP conversation is not visible in the clear
+  on the network.
+* **Closed network.** The server accepts mail only for its own address
+  (`relay denied`). It is not an open relay.
+* **Policy allowlist.** With `policy.allowlist_only = true`, mail is accepted
+  only from known onion addresses — random onion spam is blocked.
 
-## Ne sağlamaz / dikkat
+## What it does not provide / caveats
 
-* **Diskte düz metin.** Mesajlar her iki sunucuda Maildir'de şifresiz durur.
-  İçerik gizliliği istiyorsan **gövdeyi PGP ile şifrele** (v0.2 hedefi:
-  `onionmail/pgp.py`). Şimdilik istemci tarafında elle yapılabilir.
-* **Metadata alıcıda görünür.** Karşı sunucu: gönderen adresi, zaman, boyut,
-  Subject başlığını görür. Subject'i de korumak istiyorsan PGP/MIME gerekir.
-* **Uç nokta güvenliği.** Sunucu ele geçirilirse tüm posta ve onion özel anahtarı
-  (`/var/lib/tor/onionmail/`) açığa çıkar. Bu anahtar = adresin; yedekle ve
-  erişimini kısıtla (`chmod 700`, ayrı kullanıcı).
-* **Clearnet yok.** `gmail.com` vb. adreslere gönderemezsin. Yazışacağın
-  herkesin kendi onion mail sunucusu olmalı.
-* **Trafik analizi.** Global bir gözlemci zamanlama/hacim korelasyonu
-  deneyebilir. Yüksek tehdit modeli için mesaj boyutu doldurma / gecikme
-  eklemek gerekir — bu projede yok.
-* **Sandbox mutlak değil.** `firejail --net=none` ekin ağa çıkmasını ve ev
-  dizinine erişmesini engeller ama çekirdek açıkları / firejail yanlış
-  yapılandırması riski kalır. Gerçekten şüpheli şeyler için tek kullanımlık VM
-  kullan. `backend = "none"` ise ekler yalnızca diske çıkarılır, açılmaz.
+* **Plaintext on disk.** Messages sit unencrypted in the Maildir on both
+  servers. If you want content confidentiality, use the built-in
+  **end-to-end encryption** (age; see `onionmail/crypto.py` and `compose.py`),
+  or encrypt the body with PGP by hand on the client.
+* **Metadata visible to the recipient.** The other server sees the sender
+  address, time, size, and the Subject header. To protect the Subject too you
+  need the end-to-end encrypted envelope (which hides it) or PGP/MIME.
+* **Endpoint security.** If the server is compromised, all mail and the onion
+  private key (`/var/lib/tor/onionmail/`) are exposed. That key = your address;
+  back it up and restrict access (`chmod 700`, separate user).
+* **No clearnet.** You cannot send to `gmail.com` and the like. Everyone you
+  correspond with must run their own onion mail server.
+* **Traffic analysis.** A global observer can attempt timing/volume
+  correlation. Defeating that needs message-size padding / delays — not in this
+  project.
+* **The sandbox is not absolute.** `firejail --net=none` stops an attachment
+  from reaching the network and from touching your home directory, but kernel
+  bugs / firejail misconfiguration remain a risk. For genuinely suspicious
+  things, use a throwaway VM. With `backend = "none"`, attachments are only
+  extracted to disk, not opened.
 
-## Güvenli varsayılanlar (kod)
+## Safe defaults (code)
 
-* smtpd yalnızca loopback dinler; `config.validate()` 0.0.0.0'a izin vermez.
-* Giden SOCKS'ta `rdns=True` — `.onion` adı yerelde çözülmez, DNS sızıntısı yok.
-* Ek dosya adları `sanitize_filename()` ile temizlenir (path traversal, kontrol
-  karakterleri, boşluk); yalnızca basename kullanılır.
-* HTML gövde gerçek motorla render edilmez; `safe_text()` script/style siler,
-  etiketleri düşürür, uzak içerik yüklenmez.
-* Gelen mesaj boyutu `smtpd.max_message_bytes` ile sınırlı.
+* smtpd listens on loopback only; `config.validate()` rejects 0.0.0.0.
+* Outbound SOCKS uses `rdns=True` — the `.onion` name is not resolved locally,
+  so there is no DNS leak.
+* Attachment filenames are cleaned with `sanitize_filename()` (path traversal,
+  control characters, whitespace); only the basename is used.
+* The HTML body is not rendered with a real engine; `safe_text()` strips
+  script/style, drops tags, and loads no remote content.
+* Incoming message size is capped by `smtpd.max_message_bytes`.

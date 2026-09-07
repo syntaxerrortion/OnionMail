@@ -141,14 +141,14 @@ def _bounce(store: Store, entry: QueueEntry, raw: bytes) -> None:
     from email.message import EmailMessage
 
     m = EmailMessage()
-    m["Subject"] = "Teslim edilemedi (onionmail)"
+    m["Subject"] = "Delivery failed (onionmail)"
     m["From"] = "onionmail-daemon@localhost"
     m["To"] = entry.mail_from or "you@localhost"
     m.set_content(
-        "Aşağıdaki mesaj alıcı(lar)a teslim edilemedi:\n\n"
+        "The message below could not be delivered to the recipient(s):\n\n"
         f"  {entry.last_error}\n\n"
-        f"Deneme sayısı: {entry.attempts}\n"
-        "--- orijinal mesaj başlıkları ---\n"
+        f"Attempts: {entry.attempts}\n"
+        "--- original message headers ---\n"
         + raw.split(b"\r\n\r\n", 1)[0].decode("utf-8", "replace")
     )
     store.add_incoming(m.as_bytes())

@@ -11,8 +11,9 @@ from pathlib import Path
 from .config import Config, is_onion_address
 from .store import Store
 
-# Şifreli onionmail mesajı: iç MIME'ın tamamı tek age parçasına sarılır, dış
-# zarf yalnızca yönlendirme için gereken minimum başlığı taşır (Subject gizli).
+# Encrypted onionmail message: the entire inner MIME is wrapped in a single age
+# part; the outer envelope carries only the minimum headers needed for routing
+# (Subject hidden).
 ENC_HEADER = "X-Onionmail-Encrypted"
 ENC_MARKER = "age-v1"
 ENC_FILENAME = "message.age"
@@ -53,8 +54,8 @@ def build_message(
         m["In-Reply-To"] = in_reply_to
         m["References"] = in_reply_to
     if sender_pubkey:
-        # Fırsatçı anahtar yayılımı: düz mesajlarda da eklenir ki alıcı TOFU
-        # dizinine göndereni kaydedebilsin.
+        # Opportunistic key propagation: added to plain messages too, so the
+        # recipient can record the sender in their TOFU directory.
         m[PUBKEY_HEADER] = sender_pubkey
     m.set_content(body)
 
@@ -85,13 +86,14 @@ def recipients_of(msg: EmailMessage, bcc: list[str] | None = None) -> list[str]:
 
 
 def wrap_encrypted(inner: EmailMessage, recipient_pubkeys: list[str]) -> EmailMessage:
-    """`inner` (gerçek mesaj) → tek age parçalı dış zarf. Dış zarf From/To/Cc/
-    Date/Message-ID/In-Reply-To taşır; Subject `[şifreli mesaj]` olur, gerçek
-    konu + gövde + ekler şifreli parçanın içindedir."""
+    """`inner` (the real message) → an outer envelope with a single age part.
+    The envelope carries From/To/Cc/Date/Message-ID/In-Reply-To; Subject
+    becomes `[encrypted message]`, and the real subject + body + attachments
+    are inside the encrypted part."""
     from .crypto import encrypt_for
 
     if "Bcc" in inner:
-        del inner["Bcc"]  # BCC listesi şifreli parçaya bile girmemeli
+        del inner["Bcc"]  # the BCC list must not enter even the encrypted part
     blob = encrypt_for(inner.as_bytes(), recipient_pubkeys)
 
     m = EmailMessage()
@@ -100,15 +102,15 @@ def wrap_encrypted(inner: EmailMessage, recipient_pubkeys: list[str]) -> EmailMe
         m["To"] = str(inner["To"])
     if inner["Cc"]:
         m["Cc"] = str(inner["Cc"])
-    m["Subject"] = "[şifreli mesaj]"
+    m["Subject"] = "[encrypted message]"
     m["Date"] = str(inner["Date"] or formatdate(localtime=True))
     m["Message-ID"] = str(inner["Message-ID"] or make_msgid())
     if inner["In-Reply-To"]:
         m["In-Reply-To"] = str(inner["In-Reply-To"])
         m["References"] = str(inner["References"] or inner["In-Reply-To"])
     if inner[PUBKEY_HEADER]:
-        # gizli değil — dış zarfta da dursun ki şifreyi çözemeyen bile
-        # göndereni TOFU'ya kaydedebilsin
+        # not secret — keep it on the outer envelope too, so even someone who
+        # cannot decrypt can record the sender in TOFU
         m[PUBKEY_HEADER] = str(inner[PUBKEY_HEADER])
     m[ENC_HEADER] = ENC_MARKER
     m.set_content(blob, maintype="application", subtype="octet-stream",
@@ -121,15 +123,15 @@ def is_encrypted(msg: EmailMessage) -> bool:
 
 
 def encrypted_blob(msg: EmailMessage) -> bytes:
-    """Dış zarftan age şifreli baytları çıkar."""
+    """Extract the age-encrypted bytes from the outer envelope."""
     for part in msg.walk():
         if part.get_content_type() == "application/octet-stream":
             return part.get_payload(decode=True) or b""
-    raise ValueError("şifreli parça bulunamadı")
+    raise ValueError("encrypted part not found")
 
 
 def decrypt_message(msg: EmailMessage, secret: str) -> EmailMessage:
-    """Şifreli dış zarfı çöz → iç (gerçek) mesajı parse edip döndür."""
+    """Decrypt the encrypted outer envelope → parse and return the inner (real) message."""
     from .crypto import decrypt_with
 
     inner_raw = decrypt_with(encrypted_blob(msg), secret)
@@ -142,10 +144,10 @@ def queue_message(
 ) -> None:
     rcpts = recipients_of(msg, bcc)
     if not rcpts:
-        raise ValueError("alıcı yok")
+        raise ValueError("no recipient")
     bad = [r for r in rcpts if not is_onion_address(r)]
     if bad:
-        raise ValueError(f"alıcı(lar) v3 .onion değil: {', '.join(bad)}")
+        raise ValueError(f"recipient(s) are not v3 .onion: {', '.join(bad)}")
     if "Bcc" in msg:
         del msg["Bcc"]  # never transmit the Bcc header
     if encrypt_to:

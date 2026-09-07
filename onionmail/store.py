@@ -18,9 +18,10 @@ _PARSER = BytesParser(policy=policy.default)
 
 
 def _decoded_header(msg, name: str, default: str = "") -> str:
-    """`mailbox.Maildir` mesajları eski (compat32) policy ile ayrıştırılıyor —
-    `msg.get(...)` RFC 2047 encoded-word'leri (ör. Türkçe karakterli Subject)
-    çözmeden ham döndürüyor. `decode_header` bundan bağımsız çalışır."""
+    """`mailbox.Maildir` parses messages with the old (compat32) policy —
+    `msg.get(...)` returns RFC 2047 encoded-words raw (e.g. a Subject with
+    non-ASCII characters) without decoding them. `decode_header` works
+    independently of that."""
     raw = msg.get(name)
     if raw is None:
         return default
@@ -96,7 +97,7 @@ class Store:
                         key=key,
                         from_=_decoded_header(msg, "From"),
                         to=_decoded_header(msg, "To"),
-                        subject=_decoded_header(msg, "Subject", "(konu yok)"),
+                        subject=_decoded_header(msg, "Subject", "(no subject)"),
                         date=_decoded_header(msg, "Date"),
                         seen="S" in msg.get_flags(),
                         size=len(msg.as_bytes()),

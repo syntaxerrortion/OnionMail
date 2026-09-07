@@ -1,16 +1,16 @@
-"""İstemci tarafı age anahtar deposu (uçtan uca şifreleme).
+"""Client-side age key store (end-to-end encryption).
 
-İki dosya, ``~/.config/onionmail/`` altında (client.json / session.json yanında):
+Two files, under ``~/.config/onionmail/`` (next to client.json / session.json):
 
-* ``keys.json``       — kendi kimliklerin: ``{adres: {public, sealed, created}}``.
-  ``sealed`` = özel anahtarın hesap parolasıyla age-scrypt mühürlü hâli (base64).
-  Özel anahtar asla düz yazılmaz, sunucuya hiç gitmez.
-* ``known_keys.json`` — TOFU eş dizini: ``{adres: {public, fingerprint,
-  first_seen, verified, source}}``. Bir eşin anahtarı değişirse SESSIZCE
-  güncellenmez; ``remember_peer`` "changed" döner, kararı çağıran verir.
+* ``keys.json``       — your own identities: ``{address: {public, sealed, created}}``.
+  ``sealed`` = the secret key sealed with the account password via age-scrypt (base64).
+  The secret key is never written in the clear and never goes to the server.
+* ``known_keys.json`` — TOFU peer directory: ``{address: {public, fingerprint,
+  first_seen, verified, source}}``. If a peer's key changes it is NOT updated
+  SILENTLY; ``remember_peer`` returns "changed" and the caller decides.
 
-pyrage yoksa: eş dizini (fingerprint dâhil) yine çalışır; yalnızca kendi
-kimliğini açmak/oluşturmak ``CryptoError`` fırlatır.
+Without pyrage: the peer directory (fingerprint included) still works; only
+unlocking/creating your own identity raises ``CryptoError``.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class ClientKeys:
         self.dir = Path(config_dir)
         self._keys_path = self.dir / "keys.json"
         self._known_path = self.dir / "known_keys.json"
-        # o an açık olan oturumun kimliği (unlock_or_create sonrası dolar)
+        # identity of the currently unlocked session (set after unlock_or_create)
         self.address: str = ""
         self.secret: str | None = None
         self.public: str | None = None
@@ -53,10 +53,11 @@ class ClientKeys:
             os.chmod(tmp, 0o600)
         tmp.replace(path)
 
-    # -- kendi kimliğin ---------------------------------------------
+    # -- your own identity -----------------------------------------
     def unlock_or_create(self, address: str, password: str) -> tuple[str, str, bool]:
-        """``address`` için yerel age kimliğini parolayla aç; yoksa üret + mühürle.
-        Döner: ``(secret, public, yeni_mi)``. Sonuç bellekte ``self`` üzerinde tutulur."""
+        """Unlock the local age identity for ``address`` with a password; create
+        + seal it if absent. Returns ``(secret, public, is_new)``. The result is
+        kept in memory on ``self``."""
         from . import crypto
 
         address = address.strip().lower()
@@ -85,7 +86,7 @@ class ClientKeys:
         data = self._read(self._keys_path)
         rec = data.get(address)
         if not rec:
-            raise crypto.CryptoError("bu adres için yerel anahtar yok")
+            raise crypto.CryptoError("no local key for this address")
         secret = crypto.open_secret(base64.b64decode(rec["sealed"]), old)
         rec["sealed"] = base64.b64encode(crypto.seal_secret(secret, new)).decode()
         self._write(self._keys_path, data, private=True)
@@ -97,10 +98,10 @@ class ClientKeys:
         self.secret = self.public = None
         self.address = ""
 
-    # -- eş dizini (TOFU) -----------------------------------------
+    # -- peer directory (TOFU) ----------------------------------
     def remember_peer(self, address: str, public: str, source: str = "header") -> str:
-        """Görülen bir eş anahtarını kaydet. Döner: ``new`` / ``same`` /
-        ``changed`` (varsa ve farklıysa — üzerine YAZILMAZ) / ``ignored``."""
+        """Record a peer key we have seen. Returns: ``new`` / ``same`` /
+        ``changed`` (present and different — NOT overwritten) / ``ignored``."""
         from . import crypto
 
         address = address.strip().lower()
@@ -125,13 +126,13 @@ class ClientKeys:
 
     def set_peer(self, address: str, public: str, *, verified: bool = False,
                  source: str = "manual") -> None:
-        """Bir eş anahtarını açıkça yaz (elle giriş ya da değişikliği kabul)."""
+        """Write a peer key explicitly (manual entry or accepting a change)."""
         from . import crypto
 
         address = address.strip().lower()
         public = public.strip()
         if not public.startswith("age1"):
-            raise crypto.CryptoError("geçersiz age açık anahtarı (age1... bekleniyor)")
+            raise crypto.CryptoError("invalid age public key (expected age1...)")
         prev = self._read(self._known_path).get(address) or {}
         data = self._read(self._known_path)
         data[address] = {

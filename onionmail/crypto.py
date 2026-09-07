@@ -1,12 +1,12 @@
-"""Uçtan uca şifreleme — age (X25519) sarmalayıcıları.
+"""End-to-end encryption — age (X25519) wrappers.
 
-Amaç: sunucu yalnızca şifreli blob görür. Giden mesajın tüm iç MIME'ı
-(başlıklar, gövde, ekler) tek bir age şifreli parçaya sarılır (bkz.
-``compose.py``). Özel anahtar hiçbir zaman istemciden çıkmaz; disk üzerinde
-hesap parolasıyla (age scrypt) şifreli durur.
+Goal: the server only ever sees an encrypted blob. The entire inner MIME of
+an outgoing message (headers, body, attachments) is wrapped in a single
+age-encrypted part (see ``compose.py``). The secret key never leaves the
+client; on disk it is encrypted with the account password (age scrypt).
 
-pyrage kurulu değilse ``HAVE_AGE`` False olur ve her çağrı ``CryptoError``
-fırlatır — çağıran taraf bu durumda düz metne düşer.
+If pyrage is not installed, ``HAVE_AGE`` is False and every call raises
+``CryptoError`` — the caller then falls back to plaintext.
 """
 
 from __future__ import annotations
@@ -23,83 +23,83 @@ except ImportError:  # pragma: no cover - pyrage yoksa
 
 
 class CryptoError(Exception):
-    """Anahtar geçersiz, parola yanlış, şifre çözülemedi vb."""
+    """Invalid key, wrong password, could not decrypt, etc."""
 
 
 def _require() -> None:
     if not HAVE_AGE:
-        raise CryptoError("pyrage kurulu değil — 'pip install pyrage' (opsiyonel 'e2e' grubu)")
+        raise CryptoError("pyrage not installed — 'pip install pyrage' (optional 'e2e' group)")
 
 
 # --------------------------------------------------------------------------- #
-#  Anahtar çifti                                                              #
+#  Key pair                                                                   #
 # --------------------------------------------------------------------------- #
 def generate_identity() -> tuple[str, str]:
-    """Yeni age anahtar çifti üret. Döner: ``(secret_key, public_key)`` —
-    ``AGE-SECRET-KEY-1…`` ve ``age1…`` biçiminde."""
+    """Generate a new age key pair. Returns ``(secret_key, public_key)`` —
+    in ``AGE-SECRET-KEY-1…`` and ``age1…`` form."""
     _require()
     ident = x25519.Identity.generate()
     return str(ident), str(ident.to_public())
 
 
 def public_from_secret(secret: str) -> str:
-    """Özel anahtardan açık anahtarı türet (doğrulama / kurtarma için)."""
+    """Derive the public key from the secret key (for verification / recovery)."""
     _require()
     try:
         return str(x25519.Identity.from_str(secret.strip()).to_public())
-    except Exception as e:  # noqa: BLE001 - pyrage kendi hata tiplerini verir
-        raise CryptoError(f"geçersiz özel anahtar: {e}") from e
+    except Exception as e:  # noqa: BLE001 - pyrage raises its own error types
+        raise CryptoError(f"invalid secret key: {e}") from e
 
 
 def fingerprint(public_key: str) -> str:
-    """Açık anahtarın kısa parmak izi — TOFU doğrulamasında kullanıcıya
-    gösterilir. SHA-256'nın ilk 8 baytı, ``ABCD-1234-…`` biçiminde."""
+    """Short fingerprint of the public key — shown to the user during TOFU
+    verification. The first 8 bytes of SHA-256, in ``ABCD-1234-…`` form."""
     h = hashlib.sha256(public_key.strip().encode()).digest()[:8]
     return "-".join(h.hex()[i:i + 4].upper() for i in range(0, 16, 4))
 
 
 # --------------------------------------------------------------------------- #
-#  Mesaj şifreleme                                                            #
+#  Message encryption                                                         #
 # --------------------------------------------------------------------------- #
 def encrypt_for(plaintext: bytes, recipient_pubkeys: list[str]) -> bytes:
-    """``plaintext``'i verilen açık anahtarların HEPSİNE çöz(ül)ebilir şekilde
-    şifrele (age çok-alıcılı: her alıcı tek başına açar)."""
+    """Encrypt ``plaintext`` so that it can be decrypted by ALL of the given
+    public keys (age multi-recipient: each recipient decrypts on their own)."""
     _require()
     keys = [k.strip() for k in recipient_pubkeys if k and k.strip()]
     if not keys:
-        raise CryptoError("alıcı açık anahtarı yok")
+        raise CryptoError("no recipient public key")
     try:
         rcpts = [x25519.Recipient.from_str(k) for k in keys]
         return pyrage.encrypt(plaintext, rcpts)
     except Exception as e:  # noqa: BLE001
-        raise CryptoError(f"şifreleme başarısız: {e}") from e
+        raise CryptoError(f"encryption failed: {e}") from e
 
 
 def decrypt_with(ciphertext: bytes, secret: str) -> bytes:
-    """``ciphertext``'i özel anahtarla çöz."""
+    """Decrypt ``ciphertext`` with the secret key."""
     _require()
     try:
         return pyrage.decrypt(ciphertext, [x25519.Identity.from_str(secret.strip())])
     except Exception as e:  # noqa: BLE001
         raise CryptoError(
-            f"şifre çözme başarısız (anahtar bu mesaj için değil olabilir): {e}") from e
+            f"decryption failed (the key may not be for this message): {e}") from e
 
 
 # --------------------------------------------------------------------------- #
-#  Disk üzerinde parola korumalı özel anahtar                                 #
+#  Password-protected secret key on disk                                      #
 # --------------------------------------------------------------------------- #
 def seal_secret(secret: str, password: str) -> bytes:
-    """Özel anahtarı hesap parolasıyla şifrele (age scrypt). Diske bu yazılır."""
+    """Encrypt the secret key with the account password (age scrypt). This is what gets written to disk."""
     _require()
     if not password:
-        raise CryptoError("boş parola ile mühürlenemez")
+        raise CryptoError("cannot seal with an empty password")
     return passphrase.encrypt(secret.strip().encode(), password)
 
 
 def open_secret(sealed: bytes, password: str) -> str:
-    """Parola korumalı özel anahtarı aç."""
+    """Open a password-protected secret key."""
     _require()
     try:
         return passphrase.decrypt(sealed, password).decode()
     except Exception as e:  # noqa: BLE001
-        raise CryptoError(f"özel anahtar açılamadı (parola yanlış?): {e}") from e
+        raise CryptoError(f"could not open secret key (wrong password?): {e}") from e

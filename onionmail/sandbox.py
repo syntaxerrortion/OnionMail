@@ -124,10 +124,10 @@ def safe_text(msg: EmailMessage) -> str:
     """A view that executes nothing and fetches nothing."""
     body = msg.get_body(preferencelist=("plain", "html"))
     if body is None:
-        return "(gövde yok)"
+        return "(no body)"
     content = body.get_content()
     if body.get_content_type() == "text/html":
-        content = "[HTML nötrlendi — bağlantılar ve uzak içerik devre dışı]\n\n" + _html_to_text(content)
+        content = "[HTML neutralised — links and remote content disabled]\n\n" + _html_to_text(content)
     return content
 
 

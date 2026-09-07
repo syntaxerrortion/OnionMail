@@ -22,7 +22,7 @@ _PARSER = BytesParser(policy=_epol.default)
 
 class Backend(abc.ABC):
     address: str = ""
-    keys = None  # ClientKeys | None — kişinin uçtan uca şifreleme kimliği
+    keys = None  # ClientKeys | None — the user's end-to-end encryption identity
 
     @abc.abstractmethod
     def folders(self) -> list[str]: ...
@@ -91,7 +91,7 @@ class NetBackend(Backend):
     def __init__(self, client: NetClient, keys=None):
         self.client = client
         self.address = client.address
-        self.keys = keys  # ClientKeys | None — girişte açıldıysa dolu
+        self.keys = keys  # ClientKeys | None — set if unlocked at login
 
     def folders(self) -> list[str]:
         return [f["name"] for f in self.client.folders()]
@@ -117,14 +117,14 @@ class NetBackend(Backend):
         if "Bcc" in msg:
             del msg["Bcc"]
         if self.address and "@" in self.address:
-            # istemci config'i kendi kimliğini bilmez; build_message From'u
-            # 'user@onionmail' diye uydurur. Giriş yapılan hesabın gerçek
-            # adresini koy ki alıcı yanıtlayabilsin (encrypt'ten önce: dış zarf
-            # From'u inner'dan kopyalanıyor).
+            # the client config does not know its own identity; build_message
+            # fakes From as 'user@onionmail'. Put the real address of the
+            # logged-in account so the recipient can reply (before encrypt: the
+            # outer envelope's From is copied from inner).
             del msg["From"]
             msg["From"] = self.address
         if encrypt_to:
-            msg = wrap_encrypted(msg, encrypt_to)  # istemcide sarılır — sunucu şifreleyemez
+            msg = wrap_encrypted(msg, encrypt_to)  # wrapped on the client — the server cannot encrypt
         return self.client.send(msg.as_bytes(), rcpts)
 
     def queue_count(self) -> int:

@@ -91,17 +91,17 @@ class Accounts:
     def create(self, user: str, password: str, invite: str | None) -> None:
         user = user.strip().lower()
         if not USERNAME_RE.match(user):
-            raise AccountError("geçersiz kullanıcı adı (a-z 0-9 . _ -, 2-32 karakter)")
+            raise AccountError("invalid username (a-z 0-9 . _ -, 2-32 chars)")
         if len(password) < self.policy.min_password_len:
-            raise AccountError(f"şifre en az {self.policy.min_password_len} karakter olmalı")
+            raise AccountError(f"password must be at least {self.policy.min_password_len} chars")
         with self._lock:
             data = self._read()
             if user in data["users"]:
-                raise AccountError("bu kullanıcı adı alınmış")
+                raise AccountError("that username is taken")
             if not self.policy.open_registration:
                 inv = data["invites"].get(invite or "")
                 if inv is None or inv["used_by"] is not None:
-                    raise AccountError("geçersiz veya kullanılmış davet kodu")
+                    raise AccountError("invalid or already-used invite code")
             data["users"][user] = {
                 "pw_hash": _PH.hash(password),
                 "created": int(time.time()),
@@ -124,7 +124,7 @@ class Accounts:
                 return False
             now = time.time()
             if rec.get("locked_until", 0) > now:
-                raise AccountError("hesap geçici olarak kilitli, sonra tekrar dene")
+                raise AccountError("account temporarily locked, try again later")
             try:
                 _PH.verify(rec["pw_hash"], password)
             except (VerifyMismatchError, VerificationError, InvalidHashError):
@@ -147,7 +147,7 @@ class Accounts:
     def set_password(self, user: str, new_password: str) -> None:
         user = user.strip().lower()
         if len(new_password) < self.policy.min_password_len:
-            raise AccountError(f"şifre en az {self.policy.min_password_len} karakter olmalı")
+            raise AccountError(f"password must be at least {self.policy.min_password_len} chars")
         with self._lock:
             data = self._read()
             if user not in data["users"]:
@@ -163,7 +163,7 @@ class Accounts:
             data["users"].pop(user, None)
             self._write(data)
 
-    # -- age açık anahtar dizini (uçtan uca şifreleme) ---------------
+    # -- age public key directory (end-to-end encryption) -----------
     def set_pubkey(self, user: str, pubkey: str) -> None:
         user = user.strip().lower()
         with self._lock:

@@ -1,4 +1,4 @@
-"""Kişi defteri — takma ad → onion adresi eşlemesi."""
+"""Contact book — nickname → onion address mapping."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ ADDR2 = "carol@" + "c" * 56 + ".onion"
 
 def test_add_get_remove(tmp_path: Path):
     c = Contacts(tmp_path)
-    c.add("Bob", ADDR, note="iş arkadaşı")
-    rec = c.get("bob")  # case-insensitive anahtar
+    c.add("Bob", ADDR, note="colleague")
+    rec = c.get("bob")  # case-insensitive key
     assert rec["nick"] == "Bob"
     assert rec["address"] == ADDR
-    assert rec["note"] == "iş arkadaşı"
+    assert rec["note"] == "colleague"
 
     c.remove("BOB")
     assert c.get("bob") is None
@@ -37,7 +37,7 @@ def test_resolve_falls_back_to_raw_text(tmp_path: Path):
     c.add("bob", ADDR)
     assert c.resolve("bob") == ADDR
     assert c.resolve("Bob") == ADDR             # case-insensitive
-    assert c.resolve(ADDR2) == ADDR2            # bilinmeyen -> olduğu gibi
+    assert c.resolve(ADDR2) == ADDR2            # unknown -> as-is
     assert c.resolve_list(["bob", ADDR2]) == [ADDR, ADDR2]
 
 

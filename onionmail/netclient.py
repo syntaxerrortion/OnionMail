@@ -52,7 +52,7 @@ class NetClient:
         try:
             s.connect((self.server_onion, self.api_port))
         except (socks.ProxyConnectionError, socks.GeneralProxyError) as e:
-            raise NetError(f"sunucuya ulaşılamadı ({e})") from e
+            raise NetError(f"could not reach the server ({e})") from e
         return s
 
     def _rpc(self, op: str, **fields) -> dict:
@@ -69,7 +69,7 @@ class NetClient:
         finally:
             s.close()
         if not resp.get("ok"):
-            reason = resp.get("error", "bilinmeyen hata")
+            reason = resp.get("error", "unknown error")
             if reason in ("not authenticated",):
                 raise AuthError(reason)
             raise NetError(reason)
@@ -77,7 +77,7 @@ class NetClient:
 
     def _auth_rpc(self, op: str, **fields) -> dict:
         if not self.token:
-            raise AuthError("giriş yapılmadı")
+            raise AuthError("not logged in")
         try:
             return self._rpc(op, token=self.token, **fields)
         except AuthError:

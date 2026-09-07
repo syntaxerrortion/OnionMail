@@ -1,4 +1,4 @@
-"""age (X25519) şifreleme primitifleri."""
+"""age (X25519) encryption primitives."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 
 from onionmail import crypto
 
-pytestmark = pytest.mark.skipif(not crypto.HAVE_AGE, reason="pyrage kurulu değil")
+pytestmark = pytest.mark.skipif(not crypto.HAVE_AGE, reason="pyrage not installed")
 
 
 def test_identity_shape_and_derivation():
@@ -31,9 +31,9 @@ def test_fingerprint_is_stable_and_formatted():
 
 def test_encrypt_roundtrip_single():
     sec, pub = crypto.generate_identity()
-    ct = crypto.encrypt_for(b"gizli mesaj", [pub])
-    assert ct[:20] != b"gizli mesaj"[:20]
-    assert crypto.decrypt_with(ct, sec) == b"gizli mesaj"
+    ct = crypto.encrypt_for(b"secret message", [pub])
+    assert ct[:20] != b"secret message"[:20]
+    assert crypto.decrypt_with(ct, sec) == b"secret message"
 
 
 def test_encrypt_multi_recipient():
@@ -61,9 +61,9 @@ def test_encrypt_needs_a_recipient():
 
 def test_sealed_secret_roundtrip():
     sec, _ = crypto.generate_identity()
-    sealed = crypto.seal_secret(sec, "hesap-parolam")
+    sealed = crypto.seal_secret(sec, "my-account-password")
     assert sec.encode() not in sealed
-    assert crypto.open_secret(sealed, "hesap-parolam") == sec
+    assert crypto.open_secret(sealed, "my-account-password") == sec
 
 
 def test_sealed_secret_wrong_password():
@@ -79,7 +79,7 @@ def test_seal_rejects_empty_password():
         crypto.seal_secret(sec, "")
 
 
-# --- mesaj sarma (compose.py ile) --------------------------------------
+# --- message wrapping (with compose.py) --------------------------------------
 
 def _cfg():
     from onionmail.config import Config
@@ -100,22 +100,22 @@ def test_wrap_and_decrypt_message():
     a_sec, a_pub = crypto.generate_identity()
     b_sec, b_pub = crypto.generate_identity()
 
-    inner = build_message(cfg, to=[f"friend@{peer}"], subject="GİZLİ KONU",
-                          body="gövde satırı", from_user="me")
+    inner = build_message(cfg, to=[f"friend@{peer}"], subject="SECRET SUBJECT",
+                          body="body line", from_user="me")
     outer = wrap_encrypted(inner, [a_pub, b_pub])
 
     assert is_encrypted(outer)
-    assert outer["Subject"] == "[şifreli mesaj]"
+    assert outer["Subject"] == "[encrypted message]"
     assert str(outer["From"]) == "me@" + "a" * 56 + ".onion"
 
     raw = outer.as_bytes()
-    assert "GİZLİ KONU".encode() not in raw
-    assert "gövde satırı".encode() not in raw
+    assert "SECRET SUBJECT".encode() not in raw
+    assert "body line".encode() not in raw
 
     for sec in (a_sec, b_sec):
         got = decrypt_message(outer, sec)
-        assert got["Subject"] == "GİZLİ KONU"
-        assert "gövde satırı" in got.get_content()
+        assert got["Subject"] == "SECRET SUBJECT"
+        assert "body line" in got.get_content()
 
 
 def test_decrypt_message_wrong_key():

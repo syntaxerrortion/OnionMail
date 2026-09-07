@@ -1,6 +1,7 @@
-# Sunucu (Debian 13) üzerinde Tor + onionmail kurulumu
+# Tor + onionmail setup on the server (Debian 13)
 
-Bu adımlar **sunucu bilgisayarda** yapılır. Geliştirme makinene hiçbir şey kurulmaz.
+These steps are done **on the server machine**. Nothing is installed on your
+development machine.
 
 ## 1. Tor
 
@@ -9,7 +10,7 @@ sudo apt update
 sudo apt install tor
 ```
 
-`/etc/tor/torrc` sonuna ekle:
+Append to `/etc/tor/torrc`:
 
 ```
 HiddenServiceDir /var/lib/tor/onionmail/
@@ -17,33 +18,34 @@ HiddenServiceVersion 3
 HiddenServicePort 25 127.0.0.1:8025
 HiddenServicePort 8443 127.0.0.1:8443
 
-# SOCKS zaten 9050'de açık (varsayılan). Kapalıysa:
+# SOCKS is already open on 9050 (default). If not:
 SOCKSPort 127.0.0.1:9050
 ```
 
 ```bash
 sudo systemctl restart tor
-sudo cat /var/lib/tor/onionmail/hostname     # 56 karakter + .onion  -> senin adresin
+sudo cat /var/lib/tor/onionmail/hostname     # 56 chars + .onion  -> your address
 ```
 
-> Tek `HiddenServiceDir` iki portu da aynı `.onion` adresinde yayınlar:
-> `:25` -> gelen mail (`smtpd`), `:8443` -> istemci API (`apid`, GUI buraya bağlanır).
-> 25'i root gerektirmeden dinlememek için yerelde 8025 kullanıyoruz.
-> Sadece tek kutu (çok kullanıcı yok) istiyorsan `:8443` satırını atla.
+> One `HiddenServiceDir` publishes both ports on the same `.onion` address:
+> `:25` -> incoming mail (`smtpd`), `:8443` -> client API (`apid`, the GUI
+> connects here).
+> We use 8025 locally so we don't have to listen on 25 as root.
+> If you only want a single mailbox (no multi-user), skip the `:8443` line.
 
-## 2. Servis kullanıcısı ve dizinler
+## 2. Service user and directories
 
 ```bash
 sudo useradd --system --home /var/lib/onionmail --shell /usr/sbin/nologin onionmail
 sudo mkdir -p /var/lib/onionmail /etc/onionmail /opt/onionmail
 sudo chown -R onionmail:onionmail /var/lib/onionmail
 
-# smtpd'nin onion adresini okuyabilmesi için:
+# so smtpd can read the onion address:
 sudo usermod -aG debian-tor onionmail
 sudo chmod 750 /var/lib/tor/onionmail
 ```
 
-## 3. Uygulama
+## 3. Application
 
 ```bash
 sudo rsync -a --exclude .venv --exclude .git ./ /opt/onionmail/
@@ -53,11 +55,11 @@ sudo .venv/bin/pip install -e .
 sudo chown -R onionmail:onionmail /opt/onionmail
 ```
 
-`/etc/onionmail/config.toml` (örnek `config.example.toml`):
+`/etc/onionmail/config.toml` (example: `config.example.toml`):
 
 ```toml
 [identity]
-onion = ""                                    # boş bırak -> hostname_file'dan okunur
+onion = ""                                    # leave empty -> read from hostname_file
 hostname_file = "/var/lib/tor/onionmail/hostname"
 local_user = "nejarm"
 
@@ -70,21 +72,21 @@ socks_host = "127.0.0.1"
 socks_port = 9050
 
 [storage]
-maildir = "/var/lib/onionmail/Maildir"   # tek kutu modunda kullanılır
+maildir = "/var/lib/onionmail/Maildir"   # used in single-mailbox mode
 
 [sandbox]
-backend = "firejail"     # sunucuda: sudo apt install firejail
+backend = "firejail"     # on the server: sudo apt install firejail
 
-# --- çok kullanıcılı mod (ağdan login isteniyorsa) ---
+# --- multi-user mode (if you want login over the network) ---
 [accounts]
 enabled = true
 store_path = "/var/lib/onionmail/accounts"
-open_registration = false     # kayıt davet kodu ister
+open_registration = false     # registration requires an invite code
 
 [api]
 host = "127.0.0.1"
 port = 8443
-preshared_key = ""            # istersen paylaşılan bir sır ekle (istemci de verir)
+preshared_key = ""            # optionally add a shared secret (the client supplies it too)
 ```
 
 ```bash
@@ -97,36 +99,37 @@ sudo chmod 640 /etc/onionmail/config.toml
 ```bash
 sudo cp systemd/onionmail-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-# tek kutu:
+# single mailbox:
 sudo systemctl enable --now onionmail-smtpd onionmail-sender
-# çok kullanıcılı ([accounts].enabled=true ise ayrıca):
+# multi-user (also, if [accounts].enabled=true):
 sudo systemctl enable --now onionmail-apid
 systemctl status onionmail-smtpd onionmail-sender onionmail-apid
 ```
 
-## 4b. Hesaplar ve davet kodları (çok kullanıcılı mod)
+## 4b. Accounts and invite codes (multi-user mode)
 
 ```bash
 S="sudo -u onionmail ONIONMAIL_CONFIG=/etc/onionmail/config.toml /opt/onionmail/.venv/bin/python -m onionmail"
 
-# kendine bir hesap (admin yolu, davet gerekmez)
+# an account for yourself (admin path, no invite needed)
 $S useradd nejarm
 
-# arkadaşlar için tek kullanımlık davet kodu üret ve onlara ver
+# generate one-time invite codes for friends and hand them out
 $S invite -n 3
 
-# şifre sıfırlama
+# password reset
 $S passwd nejarm
 ```
 
-Arkadaşın GUI'yi kendi PC'sinde açar → sunucu `.onion` adresini girer →
-"Bağlantıyı test et" → **Kaydol** sekmesinde kullanıcı adı + şifre + davet kodu.
-Sonraki açılışlarda oturum token'ı `~/.config/onionmail/session.json`'da tutulur.
+Your friend opens the GUI on their own PC → enters the server `.onion` address →
+"Test connection" → on the **Register** tab: username + password + invite code.
+On later launches the session token is kept in
+`~/.config/onionmail/session.json`.
 
 ## 5. TUI
 
-TUI'yi kendi kullanıcınla (servis kullanıcısı değil) çalıştır; ama Maildir
-`onionmail` kullanıcısına ait. En temizi TUI'yi de `onionmail` olarak çalıştırmak:
+Run the TUI as your own user (not the service user); but the Maildir belongs to
+the `onionmail` user. Cleanest is to run the TUI as `onionmail` too:
 
 ```bash
 sudo -u onionmail ONIONMAIL_CONFIG=/etc/onionmail/config.toml \
@@ -135,24 +138,26 @@ sudo -u onionmail ONIONMAIL_CONFIG=/etc/onionmail/config.toml \
 
 ## 6. Test
 
-İki tarafın da onionmail çalıştırması gerekir. Kendi kendine test:
+Both sides must be running onionmail. Self-test:
 
 ```bash
-# durum
+# status
 sudo -u onionmail ONIONMAIL_CONFIG=/etc/onionmail/config.toml \
      /opt/onionmail/.venv/bin/python -m onionmail status
 
-# kendine mail (onion -> aynı onion)
-echo "merhaba ben" | sudo -u onionmail ONIONMAIL_CONFIG=/etc/onionmail/config.toml \
+# mail to yourself (onion -> same onion)
+echo "hello me" | sudo -u onionmail ONIONMAIL_CONFIG=/etc/onionmail/config.toml \
      /opt/onionmail/.venv/bin/python -m onionmail send \
      --to nejarm@$(sudo cat /var/lib/tor/onionmail/hostname) --subject "self test"
 ```
 
-Birkaç saniye–dakika sonra INBOX'ta görünmeli (onion devresi kurulması zaman alır).
+It should show up in INBOX after a few seconds to a few minutes (building the
+onion circuit takes time).
 
-## Ağ notları
+## Network notes
 
-* Router'da **port yönlendirmeye gerek yok** — onion service giden bağlantıyla
-  çalışır, sunucunun dışarıdan erişilebilir olması gerekmez.
-* Dinamik ev IP'si sorun değil; onion adresi sabit kalır.
-* Sunucuyu kapatırsan adres erişilemez olur; açınca geri gelir.
+* **No router port forwarding needed** — the onion service works over an
+  outbound connection; the server does not need to be reachable from outside.
+* A dynamic home IP is fine; the onion address stays the same.
+* If you turn the server off, the address is unreachable; it comes back when
+  you turn it on.

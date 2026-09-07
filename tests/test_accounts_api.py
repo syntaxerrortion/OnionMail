@@ -163,12 +163,12 @@ def test_pubkey_directory(server):
     c.register("neo", "correct horse", code)
     c.login("neo", "correct horse")
 
-    assert c.pubkey_get(f"neo@{ONION}") is None          # henüz yayınlamadı
+    assert c.pubkey_get(f"neo@{ONION}") is None          # not published yet
     c.pubkey_set("age1" + "q" * 55)
     assert c.pubkey_get(f"neo@{ONION}") == "age1" + "q" * 55
     assert c.pubkey_get("neo") == "age1" + "q" * 55       # localpart de olur
-    assert c.pubkey_get(f"stranger@{PEER}") is None       # başka sunucu
-    assert c.pubkey_get(f"ghost@{ONION}") is None         # yok olan hesap
+    assert c.pubkey_get(f"stranger@{PEER}") is None       # another server
+    assert c.pubkey_get(f"ghost@{ONION}") is None         # nonexistent account
 
     with pytest.raises(NetError):
         c.pubkey_set("not-an-age-key")
@@ -250,12 +250,12 @@ def test_smtpd_routes_to_account_maildir(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
-#  NetBackend: giden mesajın From başlığı                                      #
+#  NetBackend: the From header of an outgoing message                          #
 # --------------------------------------------------------------------------- #
 def test_netbackend_rewrites_from_to_account_address():
-    """İstemci config'i kendi kimliğini bilmez; ``build_message`` From'u
-    ``user@onionmail`` diye uydurur. ``NetBackend`` giriş yapılan hesabın
-    gerçek adresini yazmalı ki alıcı yanıtlayabilsin."""
+    """The client config does not know its own identity; ``build_message``
+    fakes From as ``user@onionmail``. ``NetBackend`` must write the real
+    address of the logged-in account so the recipient can reply."""
     from onionmail.backend import NetBackend
     from onionmail.compose import build_message
 
@@ -271,7 +271,7 @@ def test_netbackend_rewrites_from_to_account_address():
 
     from onionmail.config import Identity
 
-    # kimliği tanımsız istemci config'i (hostname dosyası yok → From uydurulur)
+    # client config with no identity (no hostname file → From is faked)
     cfg = Config(identity=Identity(hostname_file="/nonexistent/hostname"))
     msg = build_message(cfg, to=[f"bob@{PEER}"], subject="selam", body="test")
     assert str(msg["From"]) == "user@onionmail"

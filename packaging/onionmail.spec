@@ -1,16 +1,16 @@
-# PyInstaller spec — onionmail masaüstü istemcisi (gömülü Tor).
-# Kullanım (repo kökünden):  pyinstaller --noconfirm packaging/onionmail.spec
-# Ortam:  TOR_DIR   -> içinde tor(.exe) olan dizin (yoksa tor gömülmez)
+# PyInstaller spec — onionmail desktop client (bundled Tor).
+# Usage (from the repo root):  pyinstaller --noconfirm packaging/onionmail.spec
+# Environment:  TOR_DIR   -> a directory containing tor(.exe) (tor not bundled if unset)
 #         APP_ICON  -> .ico / .icns yolu (opsiyonel)
 #
-# NOT: spec içindeki göreli yollar spec dosyasının dizinine göre çözülür;
-# bu yüzden her şeyi SPEC'ten türetilen mutlak yollarla veriyoruz.
+# NOTE: relative paths in a spec are resolved against the spec file's directory;
+# so we pass everything as absolute paths derived from SPEC.
 import os
 
 from PyInstaller.utils.hooks import collect_submodules
 
 HERE = os.path.dirname(os.path.abspath(SPEC))   # .../packaging
-ROOT = os.path.dirname(HERE)                     # repo kökü
+ROOT = os.path.dirname(HERE)                     # repo root
 
 _tor_env = os.environ.get("TOR_DIR")
 tor_dir = os.path.abspath(_tor_env) if _tor_env else os.path.join(ROOT, "tor")
@@ -24,9 +24,9 @@ if os.path.isdir(tor_dir):
             rel = os.path.relpath(root, tor_dir)
             dst = "tor" if rel == "." else os.path.join("tor", rel)
             datas.append((src, dst))
-    print(f"[spec] tor gömülüyor: {tor_dir} ({len(datas)} dosya)")
+    print(f"[spec] bundling tor: {tor_dir} ({len(datas)} files)")
 else:
-    print(f"[spec] UYARI: TOR_DIR yok ({tor_dir}) — tor gömülmeyecek")
+    print(f"[spec] WARNING: no TOR_DIR ({tor_dir}) — tor will not be bundled")
 
 a = Analysis(
     [os.path.join(HERE, "launcher.py")],
@@ -45,10 +45,10 @@ exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
     name="onionmail",
-    console=False,          # pencereli (terminal açmaz)
+    console=False,          # windowed (no terminal)
     icon=icon,
 )
 coll = COLLECT(
     exe, a.binaries, a.zipfiles, a.datas,
-    name="onionmail",       # dist/onionmail/  -> zip'lenip dağıtılır
+    name="onionmail",       # dist/onionmail/  -> zipped and distributed
 )

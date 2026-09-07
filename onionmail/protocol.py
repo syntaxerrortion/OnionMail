@@ -31,8 +31,8 @@ OP_SEND = "send"
 OP_DELETE = "delete"
 OP_MOVE = "move"
 OP_MARK_SEEN = "mark_seen"
-OP_PUBKEY_SET = "pubkey_set"   # kendi age açık anahtarını sunucu dizinine yaz
-OP_PUBKEY_GET = "pubkey_get"   # bir adresin açık anahtarını sor (bu sunucudaki hesaplar)
+OP_PUBKEY_SET = "pubkey_set"   # write your own age public key to the server directory
+OP_PUBKEY_GET = "pubkey_get"   # ask for an address's public key (accounts on this server)
 
 AUTHED_OPS = frozenset({
     OP_LOGOUT, OP_FOLDERS, OP_LIST, OP_FETCH, OP_SEND, OP_DELETE, OP_MOVE,

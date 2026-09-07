@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""onionmail masaüstü istemcisi — gömülü Tor ile tek parça başlatıcı.
+"""onionmail desktop client — single-file launcher with a bundled Tor.
 
-PyInstaller ile paketlendiğinde kendi `tor(.exe)`'sini başlatır, devre
-kurulunca onionmail GUI'sini açar. Kullanıcıda Python veya Tor kurulu
-olmasına gerek yoktur.
+When packaged with PyInstaller it starts its own `tor(.exe)` and, once the
+circuit is up, opens the onionmail GUI. The user needs neither Python nor
+Tor installed.
 
-Geliştirmede (paketlenmemişken): sistemdeki `tor`u ya da zaten açık bir
-SOCKS'u kullanır; yoksa Tor Browser'ın 9150'sine düşer.
+In development (unpackaged): uses the system `tor` or an already-open SOCKS;
+otherwise falls back to Tor Browser's 9150.
 """
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ import sys
 import time
 from pathlib import Path
 
-SOCKS_PORT = 9250          # bu uygulamanın kendi Tor'u
-TOR_BROWSER_PORT = 9150    # yedek: kullanıcıda Tor Browser açıksa
+SOCKS_PORT = 9250          # this app's own Tor
+TOR_BROWSER_PORT = 9150    # fallback: if the user has Tor Browser open
 
 
 def _res_dir() -> Path:
-    """Paket içi kaynak dizini (PyInstaller: sys._MEIPASS)."""
+    """In-package resource directory (PyInstaller: sys._MEIPASS)."""
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 
@@ -58,15 +58,15 @@ def _state_dir() -> Path:
 
 
 def start_tor() -> tuple[subprocess.Popen | None, int]:
-    """(süreç, socks_port) döndürür. Süreç None ise zaten çalışan biri var."""
+    """Returns (process, socks_port). If process is None, one is already running."""
     if _port_open("127.0.0.1", SOCKS_PORT):
         return None, SOCKS_PORT
     tor = _tor_binary()
     if not tor:
         if _port_open("127.0.0.1", TOR_BROWSER_PORT):
-            print("gömülü tor yok — Tor Browser (9150) kullanılıyor")
+            print("no bundled tor — using Tor Browser (9150)")
             return None, TOR_BROWSER_PORT
-        print("UYARI: tor bulunamadı ve Tor Browser açık değil")
+        print("WARNING: tor not found and Tor Browser is not open")
         return None, SOCKS_PORT
     dd = _state_dir()
     torrc = dd / "torrc"
@@ -86,7 +86,7 @@ def start_tor() -> tuple[subprocess.Popen | None, int]:
     deadline = time.time() + 120
     while time.time() < deadline:
         if proc.poll() is not None:
-            print("tor beklenmedik şekilde kapandı")
+            print("tor exited unexpectedly")
             return None, SOCKS_PORT
         line = (proc.stdout.readline() or "").strip()
         if "Bootstrapped" in line:
@@ -98,7 +98,7 @@ def start_tor() -> tuple[subprocess.Popen | None, int]:
             return proc, SOCKS_PORT
         elif not line:
             time.sleep(0.4)
-    print("tor bootstrap zaman aşımı — yine de denenecek")
+    print("tor bootstrap timed out — will try anyway")
     return proc, SOCKS_PORT
 
 
